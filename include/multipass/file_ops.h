@@ -85,6 +85,7 @@ public:
     virtual qint64 size(QFile& file) const;
     virtual qint64 write(QFile& file, const char* data, qint64 maxSize) const;
     virtual qint64 write(QFileDevice& file, const QByteArray& data) const;
+    virtual bool flush(QFile& file) const;
 
     // QSaveFile operations
     virtual bool commit(QSaveFile& file) const;
@@ -103,6 +104,7 @@ public:
                                                      std::ios_base::openmode mode = std::ios_base::out) const;
     virtual std::unique_ptr<std::istream> open_read(const fs::path& path,
                                                     std::ios_base::openmode mode = std::ios_base::in) const;
+    virtual void copy(const fs::path& src, const fs::path& dist, fs::copy_options copy_options) const;
     virtual bool exists(const fs::path& path, std::error_code& err) const;
     virtual bool is_directory(const fs::path& path, std::error_code& err) const;
     virtual bool create_directory(const fs::path& path, std::error_code& err) const;
@@ -116,6 +118,7 @@ public:
     virtual std::unique_ptr<RecursiveDirIterator> recursive_dir_iterator(const fs::path& path,
                                                                          std::error_code& err) const;
     virtual std::unique_ptr<DirIterator> dir_iterator(const fs::path& path, std::error_code& err) const;
+    virtual fs::path weakly_canonical(const fs::path& path) const;
 };
 } // namespace multipass
 

@@ -165,6 +165,11 @@ qint64 mp::FileOps::write(QFileDevice& file, const QByteArray& data) const
     return file.write(data);
 }
 
+bool mp::FileOps::flush(QFile& file) const
+{
+    return file.flush();
+}
+
 bool mp::FileOps::commit(QSaveFile& file) const
 {
     return file.commit();
@@ -215,6 +220,11 @@ std::unique_ptr<std::ostream> mp::FileOps::open_write(const fs::path& path, std:
 std::unique_ptr<std::istream> mp::FileOps::open_read(const fs::path& path, std::ios_base::openmode mode) const
 {
     return std::make_unique<std::ifstream>(path, mode);
+}
+
+void mp::FileOps::copy(const fs::path& src, const fs::path& dist, fs::copy_options copy_options) const
+{
+    fs::copy(src, dist, copy_options);
 }
 
 bool mp::FileOps::exists(const fs::path& path, std::error_code& err) const
@@ -276,4 +286,9 @@ std::unique_ptr<mp::RecursiveDirIterator> mp::FileOps::recursive_dir_iterator(co
 std::unique_ptr<mp::DirIterator> mp::FileOps::dir_iterator(const fs::path& path, std::error_code& err) const
 {
     return std::make_unique<mp::DirIterator>(path, err);
+}
+
+fs::path mp::FileOps::weakly_canonical(const fs::path& path) const
+{
+    return fs::weakly_canonical(path);
 }

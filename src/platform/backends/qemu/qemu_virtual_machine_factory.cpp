@@ -18,12 +18,12 @@
 #include "qemu_virtual_machine_factory.h"
 #include "qemu_virtual_machine.h"
 
+#include <multipass/cloud_init_iso.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
 #include <multipass/platform.h>
 #include <multipass/process/simple_process_spec.h>
-#include <multipass/virtual_machine_description.h>
-
+#include <multipass/yaml_node_utils.h>
 #include <shared/qemu_img_utils/qemu_img_utils.h>
 
 #include <QRegularExpression>
@@ -129,5 +129,44 @@ QString mp::QemuVirtualMachineFactory::get_backend_directory_name() const
 
 auto mp::QemuVirtualMachineFactory::networks() const -> std::vector<NetworkInterfaceInfo>
 {
-    return qemu_platform->networks();
+    auto platform_ifs_info = MP_PLATFORM.get_network_interfaces_info();
+
+    std::vector<NetworkInterfaceInfo> ret;
+    for (const auto& ifs_info : platform_ifs_info)
+    {
+        const auto& info = ifs_info.second;
+        const auto& type = info.type;
+
+        if (qemu_platform->is_network_supported(type))
+            ret.push_back(info);
+    }
+
+    qemu_platform->set_authorization(ret);
+
+    return ret;
+}
+
+void mp::QemuVirtualMachineFactory::prepare_networking(std::vector<NetworkInterface>& extra_interfaces)
+{
+    if (qemu_platform->needs_network_prep())
+        mp::BaseVirtualMachineFactory::prepare_networking(extra_interfaces);
+}
+
+std::string mp::QemuVirtualMachineFactory::create_bridge_with(const NetworkInterfaceInfo& interface)
+{
+    return qemu_platform->create_bridge_with(interface);
+}
+
+mp::VirtualMachine::UPtr mp::QemuVirtualMachineFactory::clone_vm_impl(const std::string& /*source_vm_name*/,
+                                                                      const multipass::VMSpecs& /*src_vm_specs*/,
+                                                                      const VirtualMachineDescription& desc,
+                                                                      VMStatusMonitor& monitor,
+                                                                      const SSHKeyProvider& key_provider)
+{
+    return std::make_unique<mp::QemuVirtualMachine>(desc,
+                                                    qemu_platform.get(),
+                                                    monitor,
+                                                    key_provider,
+                                                    get_instance_directory(desc.vm_name),
+                                                    true);
 }

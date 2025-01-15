@@ -460,7 +460,7 @@ std::string mpt::DaemonTestFixture::fake_json_contents(const std::string& defaul
                                                             "                \"gid_mappings\": ["));
 
         QStringList gid_array_elements;
-        for (const auto& gid_pair : mount.gid_mappings)
+        for (const auto& gid_pair : mount.get_gid_mappings())
         {
             gid_array_elements += QString::fromStdString(fmt::format("\n                    {{\n"
                                                                      "                        \"host_gid\": {},\n"
@@ -471,15 +471,16 @@ std::string mpt::DaemonTestFixture::fake_json_contents(const std::string& defaul
         mount_element += gid_array_elements.join(',');
 
         mount_element += QString::fromStdString(fmt::format("\n                ],\n"
-                                                            "                \"source_path\": \"{}\",\n"
-                                                            "                \"target_path\": \"{}\",\n",
-                                                            mount.source_path, mountpoint));
+                                                            "                \"source_path\": {:?},\n"
+                                                            "                \"target_path\": {:?},\n",
+                                                            mount.get_source_path(),
+                                                            mountpoint));
         mount_element += QString::fromStdString(fmt::format("                \"mount_type\": {},\n"
                                                             "                \"uid_mappings\": [",
-                                                            mount.mount_type));
+                                                            mount.get_mount_type()));
 
         QStringList uid_array_elements;
-        for (const auto& uid_pair : mount.uid_mappings)
+        for (const auto& uid_pair : mount.get_uid_mappings())
         {
             uid_array_elements += QString::fromStdString(fmt::format("\n                    {{\n"
                                                                      "                        \"host_uid\": {},\n"
@@ -679,3 +680,17 @@ template grpc::Status mpt::DaemonTestFixture::call_daemon_slot(
                          std::promise<grpc::Status>*),
     const mp::RestoreRequest&,
     StrictMock<mpt::MockServerReaderWriter<mp::RestoreReply, mp::RestoreRequest>>&&);
+template grpc::Status mpt::DaemonTestFixture::call_daemon_slot(
+    mp::Daemon&,
+    void (mp::Daemon::*)(const mp::CloneRequest*,
+                         grpc::ServerReaderWriterInterface<mp::CloneReply, mp::CloneRequest>*,
+                         std::promise<grpc::Status>*),
+    const mp::CloneRequest&,
+    NiceMock<mpt::MockServerReaderWriter<mp::CloneReply, mp::CloneRequest>>&);
+template grpc::Status mpt::DaemonTestFixture::call_daemon_slot(
+    mp::Daemon&,
+    void (mp::Daemon::*)(const mp::CloneRequest*,
+                         grpc::ServerReaderWriterInterface<mp::CloneReply, mp::CloneRequest>*,
+                         std::promise<grpc::Status>*),
+    const mp::CloneRequest&,
+    NiceMock<mpt::MockServerReaderWriter<mp::CloneReply, mp::CloneRequest>>&&);

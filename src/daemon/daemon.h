@@ -140,6 +140,9 @@ public slots:
     virtual void authenticate(const AuthenticateRequest* request,
                               grpc::ServerReaderWriterInterface<AuthenticateReply, AuthenticateRequest>* server,
                               std::promise<grpc::Status>* status_promise);
+    virtual void clone(const CloneRequest* request,
+                       grpc::ServerReaderWriterInterface<CloneReply, CloneRequest>* server,
+                       std::promise<grpc::Status>* status_promise);
 
     virtual void snapshot(const SnapshotRequest* request,
                           grpc::ServerReaderWriterInterface<SnapshotReply, SnapshotRequest>* server,
@@ -149,6 +152,10 @@ public slots:
                          grpc::ServerReaderWriterInterface<RestoreReply, RestoreRequest>* server,
                          std::promise<grpc::Status>* status_promise);
 
+    virtual void daemon_info(const DaemonInfoRequest* request,
+                             grpc::ServerReaderWriterInterface<DaemonInfoReply, DaemonInfoRequest>* server,
+                             std::promise<grpc::Status>* status_promise);
+
 private:
     void release_resources(const std::string& instance);
     void create_vm(const CreateRequest* request, grpc::ServerReaderWriterInterface<CreateReply, CreateRequest>* server,
@@ -156,6 +163,7 @@ private:
     bool delete_vm(InstanceTable::iterator vm_it, bool purge, DeleteReply& response);
     grpc::Status reboot_vm(VirtualMachine& vm);
     grpc::Status shutdown_vm(VirtualMachine& vm, const std::chrono::milliseconds delay);
+    grpc::Status switch_off_vm(VirtualMachine& vm);
     grpc::Status cancel_vm_shutdown(const VirtualMachine& vm);
     grpc::Status get_ssh_info_for_vm(VirtualMachine& vm, SSHInfoReply& response);
 
@@ -203,13 +211,17 @@ private:
     void
     populate_instance_info(VirtualMachine& vm, InfoReply& response, bool runtime_info, bool deleted, bool& have_mounts);
 
+    std::string dest_name_for_clone(const CloneRequest& request);
+    grpc::Status validate_dest_name(const std::string& name);
+    VMSpecs clone_spec(const VMSpecs& src_vm_spec, const std::string& src_name, const std::string& dest_name);
+
     std::unique_ptr<const DaemonConfig> config;
 
 protected:
     std::unordered_map<std::string, VMSpecs> vm_instance_specs;
     InstanceTable operative_instances;
 
-    bool is_bridged(const std::string& instance_name);
+    bool is_bridged(const std::string& instance_name) const;
     void add_bridged_interface(const std::string& instance_name);
 
 private:

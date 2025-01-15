@@ -19,6 +19,7 @@
 #define MULTIPASS_UTILS_H
 
 #include <multipass/logging/level.h>
+#include <multipass/network_interface_info.h>
 #include <multipass/path.h>
 #include <multipass/singleton.h>
 #include <multipass/ssh/ssh_session.h>
@@ -98,6 +99,10 @@ bool valid_hostname(const std::string& name_string);
 std::string generate_mac_address();
 bool valid_mac_address(const std::string& mac);
 
+std::optional<NetworkInterfaceInfo> find_bridge_with(const std::vector<NetworkInterfaceInfo>& networks,
+                                                     const std::string& target_network,
+                                                     const std::string& bridge_type);
+
 // string helpers
 bool has_only_digits(const std::string& value);
 template <typename Str, typename Filter>
@@ -113,7 +118,6 @@ Str&& trim(Str&& s, Filter&& filter);
 template <typename Str>
 Str&& trim(Str&& s);
 std::string& trim_newline(std::string& s);
-std::string escape_char(const std::string& s, char c);
 std::string escape_for_shell(const std::string& s);
 std::vector<std::string> split(const std::string& string, const std::string& delimiter);
 std::string match_line_for(const std::string& output, const std::string& matcher);
@@ -223,13 +227,15 @@ public:
 
     // virtual machine helpers
     [[nodiscard]] virtual bool is_running(const VirtualMachine::State& state) const;
-    virtual std::string run_in_ssh_session(SSHSession& session, const std::string& cmd) const;
+    virtual std::string run_in_ssh_session(SSHSession& session, const std::string& cmd, bool whisper = false) const;
 
     // various
     virtual std::vector<uint8_t> random_bytes(size_t len);
     virtual QString make_uuid(const std::optional<std::string>& seed = std::nullopt) const;
     virtual void sleep_for(const std::chrono::milliseconds& ms) const;
     virtual bool is_ipv4_valid(const std::string& ipv4) const;
+
+    virtual Path default_mount_target(const Path& source) const;
 };
 } // namespace multipass
 

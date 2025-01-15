@@ -32,6 +32,7 @@
 #include <src/platform/backends/lxd/lxd_virtual_machine_factory.h>
 
 #ifdef QEMU_ENABLED
+#include "tests/qemu/linux/mock_dnsmasq_server.h"
 #include <src/platform/backends/qemu/qemu_virtual_machine_factory.h>
 #define DEFAULT_FACTORY mp::QemuVirtualMachineFactory
 #define DEFAULT_DRIVER "qemu"
@@ -70,6 +71,11 @@ struct PlatformLinux : public mpt::TestWithMockedBinPath
     template <typename VMFactoryType>
     void aux_test_driver_factory(const QString& driver)
     {
+#ifdef QEMU_ENABLED
+        const mpt::MockDNSMasqServerFactory::GuardedMock dnsmasq_server_factory_attr{
+            mpt::MockDNSMasqServerFactory::inject<NiceMock>()};
+#endif
+
         auto factory = mpt::MockProcessFactory::Inject();
         setup_driver_settings(driver);
 
@@ -250,7 +256,7 @@ TEST_F(PlatformLinux, retrieves_empty_bridges)
 
     QDir fake_sys_class_net{tmp_dir.path()};
     QDir bridge_dir{fake_sys_class_net.filePath(fake_bridge)};
-    ASSERT_EQ(mpt::make_file_with_content(bridge_dir.filePath("type"), "1"), 1);
+    mpt::make_file_with_content(bridge_dir.filePath("type"), "1");
     ASSERT_TRUE(bridge_dir.mkpath("bridge"));
 
     auto net_map = mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path());
@@ -269,7 +275,7 @@ TEST_F(PlatformLinux, retrieves_ethernet_devices)
     const auto fake_eth = "someth";
 
     QDir fake_sys_class_net{tmp_dir.path()};
-    ASSERT_EQ(mpt::make_file_with_content(fake_sys_class_net.filePath(fake_eth) + "/type", "1"), 1);
+    mpt::make_file_with_content(fake_sys_class_net.filePath(fake_eth) + "/type", "1");
 
     auto net_map = mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path());
 
@@ -300,7 +306,7 @@ TEST_F(PlatformLinux, does_not_retrieve_other_virtual)
     const auto fake_virt = "somevirt";
 
     QDir fake_sys_class_net{tmp_dir.path() + "/virtual"};
-    ASSERT_EQ(mpt::make_file_with_content(fake_sys_class_net.filePath(fake_virt) + "/type", "1"), 1);
+    mpt::make_file_with_content(fake_sys_class_net.filePath(fake_virt) + "/type", "1");
 
     EXPECT_THAT(mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path()), IsEmpty());
 }
@@ -312,7 +318,7 @@ TEST_F(PlatformLinux, does_not_retrieve_wireless)
 
     QDir fake_sys_class_net{tmp_dir.path()};
     QDir wifi_dir{fake_sys_class_net.filePath(fake_wifi)};
-    ASSERT_EQ(mpt::make_file_with_content(wifi_dir.filePath("type"), "1"), 1);
+    mpt::make_file_with_content(wifi_dir.filePath("type"), "1");
     ASSERT_TRUE(wifi_dir.mkpath("wireless"));
 
     EXPECT_THAT(mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path()), IsEmpty());
@@ -324,7 +330,7 @@ TEST_F(PlatformLinux, does_not_retrieve_protocols)
     const auto fake_net = "somenet";
 
     QDir fake_sys_class_net{tmp_dir.path()};
-    ASSERT_EQ(mpt::make_file_with_content(fake_sys_class_net.filePath(fake_net) + "/type", "32"), 2);
+    mpt::make_file_with_content(fake_sys_class_net.filePath(fake_net) + "/type", "32");
 
     EXPECT_THAT(mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path()), IsEmpty());
 }
@@ -337,9 +343,8 @@ TEST_F(PlatformLinux, does_not_retrieve_other_specified_device_types)
 
     QDir fake_sys_class_net{tmp_dir.path()};
     QDir net_dir{fake_sys_class_net.filePath(fake_net)};
-    ASSERT_EQ(mpt::make_file_with_content(net_dir.filePath("type"), "1"), 1);
-    ASSERT_EQ(mpt::make_file_with_content(net_dir.filePath("uevent"), uevent_contents),
-              static_cast<int64_t>(uevent_contents.size()));
+    mpt::make_file_with_content(net_dir.filePath("type"), "1");
+    mpt::make_file_with_content(net_dir.filePath("uevent"), uevent_contents);
 
     auto net_map = mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path());
 
@@ -359,7 +364,7 @@ TEST_P(BridgeMemberTest, retrieves_bridges_with_members)
     QDir interface_dir{fake_sys_class_net.filePath(fake_bridge)};
     QDir members_dir{interface_dir.filePath("brif")};
 
-    ASSERT_EQ(mpt::make_file_with_content(interface_dir.filePath("type"), "1"), 1);
+    mpt::make_file_with_content(interface_dir.filePath("type"), "1");
     ASSERT_TRUE(interface_dir.mkpath("bridge"));
     ASSERT_TRUE(members_dir.mkpath("."));
 
@@ -374,7 +379,7 @@ TEST_P(BridgeMemberTest, retrieves_bridges_with_members)
 
         if (recognized)
         {
-            ASSERT_EQ(mpt::make_file_with_content(member_dir.filePath("type"), "1"), 1);
+            mpt::make_file_with_content(member_dir.filePath("type"), "1");
 
             substrs_matchers.push_back(HasSubstr(member));
             network_matchers.push_back(Field(&net_value_type::first, member));

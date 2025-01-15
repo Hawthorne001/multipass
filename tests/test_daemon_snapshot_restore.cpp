@@ -131,7 +131,7 @@ TYPED_TEST(TestDaemonSnapshotRestoreCommon, failsOnActiveInstance)
     auto status =
         this->call_daemon_slot(*daemon, TypeParam::daemon_slot_ptr, request, typename TestFixture::MockServer{});
 
-    EXPECT_EQ(status.error_code(), grpc::INVALID_ARGUMENT);
+    EXPECT_EQ(status.error_code(), grpc::FAILED_PRECONDITION);
     EXPECT_THAT(status.error_message(), HasSubstr("stopped"));
 }
 
@@ -277,7 +277,7 @@ TEST_F(TestDaemonRestore, failsOnMissingSnapshotName)
                 AllOf(HasSubstr("No such snapshot"), HasSubstr(mock_instance_name), HasSubstr(missing_snapshot_name)));
 }
 
-TEST_F(TestDaemonRestore, retoresSnapshotDirectlyIfDestructive)
+TEST_F(TestDaemonRestore, restoresSnapshotDirectlyIfDestructive)
 {
     static constexpr auto* snapshot_name = "dodo";
     mp::RestoreRequest request{};

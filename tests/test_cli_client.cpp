@@ -146,6 +146,10 @@ struct MockDaemonRpc : public mp::DaemonRpc
                 (grpc::ServerContext * context,
                  (grpc::ServerReaderWriter<mp::RestoreReply, mp::RestoreRequest> * server)),
                 (override));
+    MOCK_METHOD(grpc::Status,
+                clone,
+                (grpc::ServerContext * context, (grpc::ServerReaderWriter<mp::CloneReply, mp::CloneRequest> * server)),
+                (override));
 };
 
 struct Client : public Test
@@ -439,6 +443,29 @@ auto make_info_function(const std::string& source_path = "", const std::string& 
     };
 
     return info_function;
+}
+
+mp::SSHInfo make_ssh_info(const std::string& host = "222.222.222.222",
+                          int port = 22,
+                          const std::string& priv_key = mpt::fake_key_data,
+                          const std::string& username = "user")
+{
+    mp::SSHInfo ssh_info;
+
+    ssh_info.set_host(host);
+    ssh_info.set_port(port);
+    ssh_info.set_priv_key_base64(priv_key);
+    ssh_info.set_username(username);
+
+    return ssh_info;
+}
+
+mp::SSHInfoReply make_fake_ssh_info_response(const std::string& instance_name)
+{
+    mp::SSHInfoReply response;
+    (*response.mutable_ssh_info())[instance_name] = make_ssh_info();
+
+    return response;
 }
 
 typedef std::vector<std::pair<std::string, mp::AliasDefinition>> AliasesVector;
@@ -737,6 +764,27 @@ TEST_F(Client, shell_cmd_no_args_targets_petenv)
     EXPECT_CALL(mock_daemon, ssh_info)
         .WillOnce(WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(petenv_matcher, ok)));
     EXPECT_THAT(send_command({"shell"}), Eq(mp::ReturnCode::Ok));
+}
+
+TEST_F(Client, shell_cmd_creates_console)
+{
+    EXPECT_CALL(mock_daemon, ssh_info)
+        .WillOnce([](auto, grpc::ServerReaderWriter<mp::SSHInfoReply, mp::SSHInfoRequest>* server) {
+            server->Write(make_fake_ssh_info_response("fake-instance"));
+            return grpc::Status{};
+        });
+
+    std::string error_string = "attempted to create console";
+    std::stringstream cerr_stream;
+
+    mpt::MockTerminal term{};
+    EXPECT_CALL(term, cin()).WillRepeatedly(ReturnRef(trash_stream));
+    EXPECT_CALL(term, cout()).WillRepeatedly(ReturnRef(trash_stream));
+    EXPECT_CALL(term, cerr()).WillRepeatedly(ReturnRef(cerr_stream));
+    EXPECT_CALL(term, make_console(_)).WillOnce(Throw(std::runtime_error(error_string)));
+
+    EXPECT_EQ(setup_client_and_run({"shell"}, term), mp::ReturnCode::CommandFail);
+    EXPECT_THAT(cerr_stream.str(), HasSubstr(error_string));
 }
 
 TEST_F(Client, shell_cmd_considers_configured_petenv)
@@ -1097,16 +1145,24 @@ TEST_F(Client, launch_cmd_cloudinit_option_with_valid_file_is_ok)
     EXPECT_THAT(send_command({"launch", "--cloud-init", qPrintable(tmpfile.fileName())}), Eq(mp::ReturnCode::Ok));
 }
 
-TEST_F(Client, launch_cmd_cloudinit_option_fails_with_missing_file)
+struct BadCloudInitFile : public Client, WithParamInterface<std::string>
+{
+};
+
+TEST_P(BadCloudInitFile, launch_cmd_cloudinit_option_fails_with_missing_file)
 {
     std::stringstream cerr_stream;
     auto missing_file{"/definitely/missing-file"};
 
     EXPECT_THAT(send_command({"launch", "--cloud-init", missing_file}, trash_stream, cerr_stream),
                 Eq(mp::ReturnCode::CommandLineError));
-    EXPECT_NE(std::string::npos, cerr_stream.str().find("No such file")) << "cerr has: " << cerr_stream.str();
+    EXPECT_NE(std::string::npos, cerr_stream.str().find("Could not load")) << "cerr has: " << cerr_stream.str();
     EXPECT_NE(std::string::npos, cerr_stream.str().find(missing_file)) << "cerr has: " << cerr_stream.str();
 }
+
+INSTANTIATE_TEST_SUITE_P(Client,
+                         BadCloudInitFile,
+                         Values("/definitely/missing-file", "/dev/null", "/home", "/root/.bashrc"));
 
 TEST_F(Client, launch_cmd_cloudinit_option_fails_no_value)
 {
@@ -1223,7 +1279,7 @@ TEST_F(Client, launch_cmd_mount_option)
     const QTemporaryDir fake_directory{};
 
     const auto fake_source = fake_directory.path().toStdString();
-    const auto fake_target = fake_source;
+    const auto fake_target = "";
     const auto instance_name = "some_instance";
 
     const auto mount_matcher = make_mount_matcher(fake_source, fake_target, instance_name);
@@ -1531,27 +1587,6 @@ TEST_F(Client, exec_cmd_fails_on_other_absent_instance)
             WithArg<1>(check_request_and_return<mp::SSHInfoReply, mp::SSHInfoRequest>(instance_matcher, notfound)));
     EXPECT_THAT(send_command({"exec", instance, "--no-map-working-directory", "--", "command"}),
                 Eq(mp::ReturnCode::CommandFail));
-}
-
-mp::SSHInfo make_ssh_info(const std::string& host = "222.222.222.222", int port = 22,
-                          const std::string& priv_key = mpt::fake_key_data, const std::string& username = "user")
-{
-    mp::SSHInfo ssh_info;
-
-    ssh_info.set_host(host);
-    ssh_info.set_port(port);
-    ssh_info.set_priv_key_base64(priv_key);
-    ssh_info.set_username(username);
-
-    return ssh_info;
-}
-
-mp::SSHInfoReply make_fake_ssh_info_response(const std::string& instance_name)
-{
-    mp::SSHInfoReply response;
-    (*response.mutable_ssh_info())[instance_name] = make_ssh_info();
-
-    return response;
 }
 
 struct SSHClientReturnTest : Client, WithParamInterface<int>
@@ -2239,7 +2274,7 @@ TEST_F(Client, start_cmd_launches_petenv_if_absent_among_others_present)
     EXPECT_THAT(send_command(cmd), Eq(mp::ReturnCode::Ok));
 }
 
-TEST_F(Client, start_cmd_fails_if_petenv_if_absent_amont_others_absent)
+TEST_F(Client, start_cmd_fails_if_petenv_if_absent_amount_others_absent)
 {
     std::vector<std::string> instances{"a", "b", "c", petenv_name, "xyz"}, cmd = concat({"start"}, instances);
 
@@ -2252,7 +2287,7 @@ TEST_F(Client, start_cmd_fails_if_petenv_if_absent_amont_others_absent)
     EXPECT_THAT(send_command(cmd), Eq(mp::ReturnCode::CommandFail));
 }
 
-TEST_F(Client, start_cmd_fails_if_petenv_if_absent_amont_others_deleted)
+TEST_F(Client, start_cmd_fails_if_petenv_if_absent_amount_others_deleted)
 {
     std::vector<std::string> instances{"nope", petenv_name}, cmd = concat({"start"}, instances);
 
@@ -2454,7 +2489,7 @@ TEST_F(Client, stop_cmd_fails_with_time_suffix)
     EXPECT_THAT(send_command({"stop", "foo", "--time", "+10s"}), Eq(mp::ReturnCode::CommandLineError));
 }
 
-TEST_F(Client, stop_cmd_succeds_with_cancel)
+TEST_F(Client, stop_cmd_succeeds_with_cancel)
 {
     EXPECT_CALL(mock_daemon, stop(_, _));
     EXPECT_THAT(send_command({"stop", "foo", "--cancel"}), Eq(mp::ReturnCode::Ok));
@@ -2517,6 +2552,32 @@ TEST_F(Client, stop_cmd_disabled_petenv_all)
     EXPECT_CALL(mock_daemon, stop(_, _));
 
     EXPECT_THAT(send_command({"stop", "--all"}), Eq(mp::ReturnCode::Ok));
+}
+
+TEST_F(Client, stop_cmd_force_sends_proper_request)
+{
+    const auto force_set_matcher = Property(&mp::StopRequest::force_stop, IsTrue());
+    EXPECT_CALL(mock_daemon, stop)
+        .WillOnce(WithArg<1>(check_request_and_return<mp::StopReply, mp::StopRequest>(force_set_matcher, ok)));
+
+    EXPECT_THAT(send_command({"stop", "foo", "--force"}), Eq(mp::ReturnCode::Ok));
+}
+
+TEST_F(Client, stop_cmd_force_conflicts_with_time_option)
+{
+    EXPECT_THAT(send_command({"stop", "foo", "--force", "--time", "10"}), Eq(mp::ReturnCode::CommandLineError));
+}
+
+TEST_F(Client, stop_cmd_force_conflicts_with_cancel_option)
+{
+    EXPECT_THAT(send_command({"stop", "foo", "--force", "--cancel"}), Eq(mp::ReturnCode::CommandLineError));
+}
+
+TEST_F(Client, stopCmdWrongVmState)
+{
+    const auto invalid_vm_state_failure = grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, "msg"};
+    EXPECT_CALL(mock_daemon, stop(_, _)).WillOnce(Return(invalid_vm_state_failure));
+    EXPECT_THAT(send_command({"stop", "foo"}), Eq(mp::ReturnCode::CommandFail));
 }
 
 // suspend cli tests
@@ -2812,6 +2873,13 @@ TEST_F(Client, delete_cmd_accepts_purge_option)
     EXPECT_CALL(mock_daemon, delet(_, _)).Times(2);
     EXPECT_THAT(send_command({"delete", "--purge", "foo"}), Eq(mp::ReturnCode::Ok));
     EXPECT_THAT(send_command({"delete", "-p", "bar"}), Eq(mp::ReturnCode::Ok));
+}
+
+TEST_F(Client, deleteCmdWrongVmState)
+{
+    const auto invalid_vm_state_failure = grpc::Status{grpc::StatusCode::INVALID_ARGUMENT, "msg"};
+    EXPECT_CALL(mock_daemon, delet(_, _)).WillOnce(Return(invalid_vm_state_failure));
+    EXPECT_THAT(send_command({"delete", "foo"}), Eq(mp::ReturnCode::CommandFail));
 }
 
 // find cli tests
@@ -3156,6 +3224,48 @@ TEST_F(Client, help_cmd_launch_same_launch_cmd_help)
 
     EXPECT_THAT(help_cmd_launch.str(), Ne(""));
     EXPECT_THAT(help_cmd_launch.str(), Eq(launch_cmd_help.str()));
+}
+
+// clone cli tests
+
+TEST_F(Client, cloneCmdWithTooManyArgsFails)
+{
+    EXPECT_EQ(send_command({"clone", "vm1", "vm2"}), mp::ReturnCode::CommandLineError);
+}
+
+TEST_F(Client, cloneCmdWithTooLessArgsFails)
+{
+    EXPECT_EQ(send_command({"clone"}), mp::ReturnCode::CommandLineError);
+}
+
+TEST_F(Client, cloneCmdInvalidOptionFails)
+{
+    EXPECT_EQ(send_command({"clone", "--invalid_option"}), mp::ReturnCode::CommandLineError);
+}
+
+TEST_F(Client, cloneCmdHelpOk)
+{
+    EXPECT_EQ(send_command({"clone", "--help"}), mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, cloneCmdWithSrcVMNameOnly)
+{
+    EXPECT_CALL(mock_daemon, clone).Times(1);
+    EXPECT_EQ(send_command({"clone", "vm1"}), mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, cloneCmdWithDestName)
+{
+    EXPECT_CALL(mock_daemon, clone).Times(2);
+    EXPECT_EQ(send_command({"clone", "vm1", "-n", "vm2"}), mp::ReturnCode::Ok);
+    EXPECT_EQ(send_command({"clone", "vm1", "--name", "vm2"}), mp::ReturnCode::Ok);
+}
+
+TEST_F(Client, cloneCmdFailedFromDaemon)
+{
+    const grpc::Status clone_failure{grpc::StatusCode::FAILED_PRECONDITION, "dummy_msg"};
+    EXPECT_CALL(mock_daemon, clone).Times(1).WillOnce(Return(clone_failure));
+    EXPECT_EQ(send_command({"clone", "vm1"}), mp::ReturnCode::CommandFail);
 }
 
 // snapshot cli tests

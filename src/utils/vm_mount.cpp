@@ -17,6 +17,8 @@
 
 #include <multipass/vm_mount.h>
 
+#include <multipass/file_ops.h>
+
 #include <QJsonArray>
 
 namespace mp = multipass;
@@ -41,11 +43,39 @@ mp::VMMount parse_json(const QJsonObject& json)
             {gid_entry.toObject()["host_gid"].toInt(), gid_entry.toObject()["instance_gid"].toInt()});
     }
 
-    uid_mappings = mp::unique_id_mappings(uid_mappings);
-    gid_mappings = mp::unique_id_mappings(gid_mappings);
+    mp::unique_id_mappings(uid_mappings);
+    mp::unique_id_mappings(gid_mappings);
     auto mount_type = mp::VMMount::MountType(json["mount_type"].toInt());
 
     return mp::VMMount{std::move(source_path), std::move(gid_mappings), std::move(uid_mappings), mount_type};
+}
+
+auto print_mappings(const std::unordered_map<int, std::unordered_set<int>>& dup_id_map,
+                    const std::unordered_map<int, std::unordered_set<int>>& dup_rev_id_map)
+{
+    std::string retval;
+
+    for (const auto& pair : dup_id_map)
+    {
+        retval += fmt::format("{}: [", pair.first);
+        for (const auto& mapping : pair.second)
+            retval += fmt::format("{}:{}, ", pair.first, mapping);
+
+        retval = retval.substr(0, retval.size() - 2);
+        retval += "]; ";
+    }
+
+    for (const auto& pair : dup_rev_id_map)
+    {
+        retval += fmt::format("{}: [", pair.first);
+        for (const auto& mapping : pair.second)
+            retval += fmt::format("{}:{}, ", mapping, pair.first);
+
+        retval = retval.substr(0, retval.size() - 2);
+        retval += "]; ";
+    }
+
+    return retval.substr(0, retval.size() - 2);
 }
 } // namespace
 
@@ -53,11 +83,30 @@ mp::VMMount::VMMount(const std::string& sourcePath,
                      id_mappings gidMappings,
                      id_mappings uidMappings,
                      MountType mountType)
-    : source_path(sourcePath),
+    : source_path(MP_FILEOPS.weakly_canonical(sourcePath).string()),
       gid_mappings(std::move(gidMappings)),
       uid_mappings(std::move(uidMappings)),
       mount_type(mountType)
 {
+    fmt::memory_buffer errors;
+
+    if (const auto& [dup_uid_map, dup_rev_uid_map] = mp::unique_id_mappings(uid_mappings);
+        !dup_uid_map.empty() || !dup_rev_uid_map.empty())
+    {
+        fmt::format_to(std::back_inserter(errors),
+                       fmt::format("\nuids: {}", print_mappings(dup_uid_map, dup_rev_uid_map)));
+    }
+
+    if (const auto& [dup_gid_map, dup_rev_gid_map] = mp::unique_id_mappings(gid_mappings);
+        !dup_gid_map.empty() || !dup_rev_gid_map.empty())
+    {
+        fmt::format_to(std::back_inserter(errors),
+                       fmt::format("\ngids: {}", print_mappings(dup_gid_map, dup_rev_gid_map)));
+    }
+
+    if (errors.size())
+        throw std::runtime_error(
+            fmt::format("Mount cannot apply mapping with duplicate ids:{}", fmt::to_string(errors)));
 }
 
 mp::VMMount::VMMount(const QJsonObject& json) : VMMount{parse_json(json)} // delegate on copy ctor

@@ -340,6 +340,23 @@ TEST(Utils, make_file_with_content_throws_on_write_error)
                          mpt::match_what(HasSubstr("failed to write to file")));
 }
 
+TEST(Utils, make_file_with_content_throws_on_failure_to_flush)
+{
+    std::string file_name{"some_dir/test-file"};
+
+    auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
+
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true));
+    EXPECT_CALL(*mock_file_ops, open(_, _)).WillOnce(Return(true));
+    EXPECT_CALL(*mock_file_ops, write(A<QFile&>(), _, _)).WillOnce(Return(file_contents.size()));
+    EXPECT_CALL(*mock_file_ops, flush(A<QFile&>())).WillOnce(Return(false));
+
+    MP_EXPECT_THROW_THAT(MP_UTILS.make_file_with_content(file_name, file_contents),
+                         std::runtime_error,
+                         mpt::match_what(HasSubstr("failed to flush file")));
+}
+
 TEST(Utils, expectedScryptHashReturned)
 {
     const auto passphrase = MP_UTILS.generate_scrypt_hash_for("passphrase");
@@ -436,13 +453,6 @@ TEST(Utils, trim_newline_assertion_works)
 {
     std::string s{"wrong"};
     ASSERT_DEBUG_DEATH(mp::utils::trim_newline(s), "[Aa]ssert");
-}
-
-TEST(Utils, escape_char_actually_escapes)
-{
-    std::string s{"I've got \"quotes\""};
-    auto res = mp::utils::escape_char(s, '"');
-    EXPECT_THAT(res, ::testing::StrEq("I've got \\\"quotes\\\""));
 }
 
 TEST(Utils, escape_for_shell_actually_escapes)

@@ -115,7 +115,8 @@ struct TestInstanceSettingsHandler : public Test
     std::function<void(const std::string&)> make_fake_add()
     {
         return [this](const std::string& n) {
-            specs[n].extra_interfaces.push_back(mp::NetworkInterface{"eth8", mpu::generate_mac_address(), true});
+            if (!make_fake_is_bridged()(n))
+                specs[n].extra_interfaces.push_back(mp::NetworkInterface{"eth8", mpu::generate_mac_address(), true});
         };
     }
 
@@ -519,7 +520,7 @@ TEST_F(TestInstanceSettingsHandler, setRefusesToUnbridge)
 
     MP_EXPECT_THROW_THAT(make_handler().set(make_key(target_instance_name, "bridged"), "false"),
                          mp::InvalidSettingException,
-                         mpt::match_what(HasSubstr("Bridged interface cannot be removed")));
+                         mpt::match_what(HasSubstr("not supported")));
 }
 
 TEST_F(TestInstanceSettingsHandler, setAddsInterface)
@@ -571,7 +572,7 @@ TEST_P(TestInstanceModOnNonStoppedInstance, setRefusesToModifyNonStoppedInstance
     EXPECT_CALL(target_instance, current_state).WillOnce(Return(state));
 
     MP_EXPECT_THROW_THAT(make_handler().set(make_key(target_instance_name, property), "123"),
-                         mp::InstanceSettingsException,
+                         mp::InstanceStateSettingsException,
                          mpt::match_what(AllOf(HasSubstr("Cannot update"), HasSubstr("Instance must be stopped"))));
 
     EXPECT_EQ(original_specs, specs[target_instance_name]);

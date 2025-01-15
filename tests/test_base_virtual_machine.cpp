@@ -133,7 +133,7 @@ struct StubBaseVirtualMachine : public mp::BaseVirtualMachine
         state = St::running;
     }
 
-    void shutdown() override
+    void shutdown(ShutdownPolicy shutdown_policy = ShutdownPolicy::Powerdown) override
     {
         state = St::off;
     }
@@ -801,7 +801,7 @@ TEST_F(BaseVM, restoresSnapshotsWithExtraInterfaceDiff)
     EXPECT_CALL(snapshot, get_mounts).WillOnce(ReturnRef(original_specs.mounts));
     EXPECT_CALL(snapshot, get_metadata).WillOnce(ReturnRef(original_specs.metadata));
 
-    // set the behavior of get_extra_interfaces to cause the difference to the new spece extra interfaces
+    // set the behavior of get_extra_interfaces to cause the difference to the new space extra interfaces
     EXPECT_CALL(snapshot, get_extra_interfaces).Times(3).WillRepeatedly(Return(original_specs.extra_interfaces));
 
     EXPECT_CALL(*mock_cloud_init_file_ops_injection.first,
@@ -1199,11 +1199,13 @@ TEST_F(BaseVM, rollsbackFailedRestore)
     auto& target_snapshot = *snapshot_album[1];
     auto& last_snapshot = *snapshot_album[2];
 
+    mp::VMMount mount{"src", {}, {}, mp::VMMount::MountType::Classic};
+
     auto changed_specs = original_specs;
     changed_specs.num_cores = 4;
     changed_specs.mem_size = mp::MemorySize{"2G"};
     changed_specs.state = multipass::VirtualMachine::State::running;
-    changed_specs.mounts["dst"].source_path = "src";
+    changed_specs.mounts["dst"] = mount;
     changed_specs.metadata["blah"] = "this and that";
 
     EXPECT_CALL(target_snapshot, get_state).WillRepeatedly(Return(original_specs.state));
@@ -1315,7 +1317,7 @@ TEST_F(BaseVM, sshExecRunsDirectlyIfConnected)
 
     auto [mock_utils_ptr, guard] = mpt::MockUtils::inject();
     EXPECT_CALL(*mock_utils_ptr, is_running).WillOnce(Return(true));
-    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd)).Times(1);
+    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd, _)).Times(1);
 
     vm.simulate_ssh_exec();
     vm.renew_ssh_session();
@@ -1329,7 +1331,7 @@ TEST_F(BaseVM, sshExecReconnectsIfDisconnected)
 
     auto [mock_utils_ptr, guard] = mpt::MockUtils::inject();
     EXPECT_CALL(*mock_utils_ptr, is_running).WillOnce(Return(true));
-    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd)).Times(1);
+    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd, _)).Times(1);
 
     vm.simulate_ssh_exec();
 
@@ -1342,7 +1344,7 @@ TEST_F(BaseVM, sshExecTriesToReconnectAfterLateDetectionOfDisconnection)
 
     auto [mock_utils_ptr, guard] = mpt::MockUtils::inject();
     EXPECT_CALL(*mock_utils_ptr, is_running).WillRepeatedly(Return(true));
-    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd))
+    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd, _))
         .WillOnce(Throw(mp::SSHException{"intentional"}))
         .WillOnce(DoDefault());
 
@@ -1360,7 +1362,7 @@ TEST_F(BaseVM, sshExecRethrowsOtherExceptions)
 
     auto [mock_utils_ptr, guard] = mpt::MockUtils::inject();
     EXPECT_CALL(*mock_utils_ptr, is_running).WillOnce(Return(true));
-    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd)).WillOnce(Throw(std::runtime_error{"intentional"}));
+    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd, _)).WillOnce(Throw(std::runtime_error{"intentional"}));
 
     vm.simulate_ssh_exec();
     vm.renew_ssh_session();
@@ -1374,7 +1376,7 @@ TEST_F(BaseVM, sshExecRethrowsSSHExceptionsWhenConnected)
 
     auto [mock_utils_ptr, guard] = mpt::MockUtils::inject();
     EXPECT_CALL(*mock_utils_ptr, is_running).WillOnce(Return(true));
-    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd)).WillOnce(Throw(mp::SSHException{"intentional"}));
+    EXPECT_CALL(*mock_utils_ptr, run_in_ssh_session(_, cmd, _)).WillOnce(Throw(mp::SSHException{"intentional"}));
 
     vm.simulate_ssh_exec();
     vm.renew_ssh_session();

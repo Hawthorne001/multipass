@@ -113,21 +113,19 @@ mp::ParseCode cmd::Mount::parse_args(mp::ArgParser* parser)
     parser->addPositionalArgument("target",
                                   "Target mount points, in <name>[:<path>] format, where <name> "
                                   "is an instance name, and optional <path> is the mount point. "
-                                  "If omitted, the mount point will be the same as the source's "
-                                  "absolute path",
+                                  "If omitted, the mount point will be under /home/ubuntu/<source-dir>, "
+                                  "where <source-dir> is the name of the <source> directory.",
                                   "<target> [<target> ...]");
 
     QCommandLineOption gid_mappings({"g", "gid-map"},
-                                    "A mapping of group IDs for use in the mount. "
-                                    "File and folder ownership will be mapped from "
-                                    "<host> to <instance> inside the instance. Can be "
-                                    "used multiple times.",
+                                    "A mapping of group IDs for use in the mount. File and folder ownership will be "
+                                    "mapped from <host> to <instance> inside the instance. Can be used multiple times. "
+                                    "Mappings can only be specified as a one-to-one relationship.",
                                     "host>:<instance");
     QCommandLineOption uid_mappings({"u", "uid-map"},
-                                    "A mapping of user IDs for use in the mount. "
-                                    "File and folder ownership will be mapped from "
-                                    "<host> to <instance> inside the instance. Can be "
-                                    "used multiple times.",
+                                    "A mapping of user IDs for use in the mount. File and folder ownership will be "
+                                    "mapped from <host> to <instance> inside the instance. Can be used multiple times. "
+                                    "Mappings can only be specified as a one-to-one relationship.",
                                     "host>:<instance");
     QCommandLineOption mount_type_option({"t", "type"},
                                          "Specify the type of mount to use.\n"
@@ -182,15 +180,7 @@ mp::ParseCode cmd::Mount::parse_args(mp::ArgParser* parser)
 
         auto entry = request.add_target_paths();
         entry->set_instance_name(instance_name.toStdString());
-
-        if (target_path.isEmpty())
-        {
-            entry->set_target_path(source_path.toStdString());
-        }
-        else
-        {
-            entry->set_target_path(target_path.toStdString());
-        }
+        entry->set_target_path(target_path.toStdString());
     }
 
     QRegularExpression map_matcher("^([0-9]+[:][0-9]+)$");

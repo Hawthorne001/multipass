@@ -138,6 +138,9 @@ struct Daemon : public mpt::DaemonTestFixture
 
     mpt::MockSettings::GuardedMock mock_settings_injection = mpt::MockSettings::inject<StrictMock>();
     mpt::MockSettings& mock_settings = *mock_settings_injection.first;
+
+    const mpt::MockJsonUtils::GuardedMock mock_json_utils_injection = mpt::MockJsonUtils::inject<NiceMock>();
+    mpt::MockJsonUtils& mock_json_utils = *mock_json_utils_injection.first;
 };
 
 TEST_F(Daemon, receives_commands_and_calls_corresponding_slot)
@@ -195,7 +198,8 @@ TEST_F(Daemon, receives_commands_and_calls_corresponding_slot)
         .WillOnce(Invoke(&daemon, &mpt::MockDaemon::set_promise_value<mp::SnapshotRequest, mp::SnapshotReply>));
     EXPECT_CALL(daemon, restore)
         .WillOnce(Invoke(&daemon, &mpt::MockDaemon::set_promise_value<mp::RestoreRequest, mp::RestoreReply>));
-
+    EXPECT_CALL(daemon, clone)
+        .WillOnce(Invoke(&daemon, &mpt::MockDaemon::set_promise_value<mp::CloneRequest, mp::CloneReply>));
     EXPECT_CALL(mock_settings, get(Eq("foo"))).WillRepeatedly(Return("bar"));
 
     send_commands({{"test_keys"},
@@ -219,7 +223,8 @@ TEST_F(Daemon, receives_commands_and_calls_corresponding_slot)
                    {"find", "something"},
                    {"mount", ".", "target"},
                    {"umount", "instance"},
-                   {"networks"}});
+                   {"networks"},
+                   {"clone", "foo"}});
 }
 
 TEST_F(Daemon, provides_version)
@@ -236,10 +241,10 @@ TEST_F(Daemon, failed_restart_command_returns_fulfilled_promise)
 {
     mp::Daemon daemon{config_builder.build()};
 
-    auto nonexistant_instance = new mp::InstanceNames; // on heap as *Request takes ownership
-    nonexistant_instance->add_instance_name("nonexistant");
+    auto nonexistent_instance = new mp::InstanceNames; // on heap as *Request takes ownership
+    nonexistent_instance->add_instance_name("nonexistent");
     mp::RestartRequest request;
-    request.set_allocated_instance_names(nonexistant_instance);
+    request.set_allocated_instance_names(nonexistent_instance);
     std::promise<grpc::Status> status_promise;
 
     daemon.restart(&request, nullptr, &status_promise);
@@ -375,6 +380,8 @@ struct DaemonCreateLaunchAliasTestSuite : public Daemon, public FakeAliasConfig,
     {
         EXPECT_CALL(mpt::MockStandardPaths::mock_instance(), writableLocation(_))
             .WillRepeatedly(Return(fake_alias_dir.path()));
+
+        MP_DELEGATE_MOCK_CALLS_ON_BASE(mock_json_utils, write_json, JsonUtils);
     }
 };
 
@@ -404,7 +411,7 @@ struct LaunchWithBridges
 {
 };
 
-struct LaunchWithNoNetworkCloudInit : public Daemon, public WithParamInterface<std::vector<std::string>>
+struct LaunchWithNoExtraNetworkCloudInit : public Daemon, public WithParamInterface<std::vector<std::string>>
 {
 };
 
@@ -1109,7 +1116,7 @@ TEST_P(DaemonCreateLaunchTestSuite, blueprint_not_found_passes_expected_data)
     send_command({GetParam()});
 }
 
-TEST_P(LaunchWithNoNetworkCloudInit, no_network_cloud_init)
+TEST_P(LaunchWithNoExtraNetworkCloudInit, no_extra_network_cloud_init)
 {
     mpt::MockVirtualMachineFactory* mock_factory = use_a_mock_vm_factory();
     mp::Daemon daemon{config_builder.build()};
@@ -1117,9 +1124,10 @@ TEST_P(LaunchWithNoNetworkCloudInit, no_network_cloud_init)
     const auto launch_args = GetParam();
 
     EXPECT_CALL(*mock_factory, prepare_instance_image(_, _))
-        .WillOnce(Invoke([](const multipass::VMImage&, const mp::VirtualMachineDescription& desc) {
-            EXPECT_TRUE(desc.network_data_config.IsNull());
-        }));
+        .WillOnce([](const multipass::VMImage&, const mp::VirtualMachineDescription& desc) {
+            EXPECT_FALSE(desc.network_data_config["ethernets"]["default"].IsNull());
+            EXPECT_FALSE(desc.network_data_config["ethernets"]["extra0"].IsDefined());
+        });
 
     send_command(launch_args);
 }
@@ -1134,15 +1142,22 @@ std::vector<std::string> make_args(const std::vector<std::string>& args)
     return all_args;
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    Daemon, LaunchWithNoNetworkCloudInit,
-    Values(make_args({}), make_args({"xenial"}), make_args({"xenial", "--network", "name=eth0,mode=manual"}),
-           make_args({"groovy"}), make_args({"groovy", "--network", "name=eth0,mode=manual"}),
-           make_args({"--network", "name=eth0,mode=manual"}), make_args({"devel"}),
-           make_args({"hirsute", "--network", "name=eth0,mode=manual"}), make_args({"daily:21.04"}),
-           make_args({"daily:21.04", "--network", "name=eth0,mode=manual"}),
-           make_args({"appliance:openhab", "--network", "name=eth0,mode=manual"}), make_args({"appliance:nextcloud"}),
-           make_args({"snapcraft:core18", "--network", "name=eth0,mode=manual"}), make_args({"snapcraft:core20"})));
+INSTANTIATE_TEST_SUITE_P(Daemon,
+                         LaunchWithNoExtraNetworkCloudInit,
+                         Values(make_args({}),
+                                make_args({"xenial"}),
+                                make_args({"xenial", "--network", "name=eth0,mode=manual"}),
+                                make_args({"groovy"}),
+                                make_args({"groovy", "--network", "name=eth0,mode=manual"}),
+                                make_args({"--network", "name=eth0,mode=manual"}),
+                                make_args({"devel"}),
+                                make_args({"hirsute", "--network", "name=eth0,mode=manual"}),
+                                make_args({"daily:21.04"}),
+                                make_args({"daily:21.04", "--network", "name=eth0,mode=manual"}),
+                                make_args({"appliance:openhab", "--network", "name=eth0,mode=manual"}),
+                                make_args({"appliance:nextcloud"}),
+                                make_args({"snapcraft:core18", "--network", "name=eth0,mode=manual"}),
+                                make_args({"snapcraft:core20"})));
 
 TEST_P(LaunchWithBridges, creates_network_cloud_init_iso)
 {
@@ -1374,17 +1389,10 @@ TEST_F(DaemonCreateLaunchTestSuite, blueprintFromFileCallsCorrectFunction)
     send_command({"launch", "file://blah.yaml"});
 }
 
-void check_maps_in_json(const QString& file, const mp::id_mappings& expected_gid_mappings,
+void check_maps_in_json(const QJsonObject& doc_object,
+                        const mp::id_mappings& expected_gid_mappings,
                         const mp::id_mappings& expected_uid_mappings)
 {
-    QByteArray json = mpt::load(file);
-
-    QJsonParseError parse_error;
-    const auto doc = QJsonDocument::fromJson(json, &parse_error);
-    EXPECT_FALSE(doc.isNull());
-    EXPECT_TRUE(doc.isObject());
-
-    const auto doc_object = doc.object();
     const auto instance_object = doc_object["real-zebraphant"].toObject();
 
     const auto mounts = instance_object["mounts"].toArray();
@@ -1444,13 +1452,12 @@ TEST_F(Daemon, reads_mac_addresses_from_json)
         EXPECT_THAT(list_reply.instance_list().instances(), instance_matcher);
     }
 
-    // Removing the JSON is possible now because data was already read. This step is not necessary, but doing it we
-    // make sure that the file was indeed rewritten after the next step.
-    QFile::remove(filename);
-    daemon.persist_instances();
+    EXPECT_CALL(mock_json_utils, write_json(_, Eq(filename)))
+        .WillOnce(WithArg<0>([&mac_addr, &extra_interfaces](const QJsonObject& obj) {
+            check_interfaces_in_json(obj, mac_addr, extra_interfaces);
+        }));
 
-    // Finally, check the contents of the file. If they match with what we read, we are done.
-    check_interfaces_in_json(filename, mac_addr, extra_interfaces);
+    daemon.persist_instances();
 }
 
 TEST_F(Daemon, writesAndReadsMountsInJson)
@@ -1511,16 +1518,18 @@ TEST_F(Daemon, writesAndReadsMountsInJson)
         EXPECT_THAT(list_reply.instance_list().instances(), instance_matcher);
     }
 
-    QFile::remove(filename);    // Remove the JSON.
-    daemon.persist_instances(); // Write it again to disk.
-    check_mounts_in_json(filename, mounts);
+    EXPECT_CALL(mock_json_utils, write_json(_, Eq(filename))).WillOnce(WithArg<0>([&mounts](const QJsonObject& obj) {
+        check_mounts_in_json(obj, mounts);
+    }));
+
+    daemon.persist_instances();
 }
 
 TEST_F(Daemon, writes_and_reads_ordered_maps_in_json)
 {
     config_builder.vault = std::make_unique<NiceMock<mpt::MockVMImageVault>>();
 
-    mp::id_mappings uid_mappings{{1002, 0}, {1000, 0}, {1001, 1}};
+    mp::id_mappings uid_mappings{{1002, 0}, {1001, 1}};
     mp::id_mappings gid_mappings{{1002, 0}, {1000, 2}};
     std::unordered_map<std::string, mp::VMMount> mounts;
     mpt::TempDir dir;
@@ -1541,11 +1550,12 @@ TEST_F(Daemon, writes_and_reads_ordered_maps_in_json)
     send_command({"list"}, stream);
     EXPECT_THAT(stream.str(), HasSubstr("real-zebraphant"));
 
-    QFile::remove(filename);
+    EXPECT_CALL(mock_json_utils, write_json(_, Eq(filename)))
+        .WillOnce(WithArg<0>([&uid_mappings, &gid_mappings](const QJsonObject& obj) {
+            check_maps_in_json(obj, uid_mappings, gid_mappings);
+        }));
 
     send_command({"purge"});
-
-    check_maps_in_json(filename, uid_mappings, gid_mappings);
 }
 
 TEST_F(Daemon, launches_with_valid_network_interface)
@@ -1677,7 +1687,7 @@ constexpr auto deleted_template = R"(
     "state": 1
 }})";
 
-TEST_F(Daemon, skips_over_instance_ghosts_in_db) // which will have been sometimes writen for purged instances
+TEST_F(Daemon, skips_over_instance_ghosts_in_db) // which will have been sometimes written for purged instances
 {
     config_builder.vault = std::make_unique<NiceMock<mpt::MockVMImageVault>>();
 
@@ -1740,6 +1750,13 @@ TEST_F(Daemon, ctor_drops_removed_instances)
     EXPECT_CALL(*mock_factory, create_virtual_machine(Field(&mp::VirtualMachineDescription::vm_name, gone), _, _))
         .Times(0);
 
+    EXPECT_CALL(mock_json_utils, write_json(_, Eq(filename)))
+        .WillOnce(Return())
+        .WillOnce(WithArg<0>([&stayed, &gone](const QJsonObject& obj) {
+            QJsonDocument doc{obj};
+            EXPECT_THAT(doc.toJson().toStdString(), AllOf(HasSubstr(stayed), Not(HasSubstr(gone))));
+        }));
+
     mp::Daemon daemon{config_builder.build()};
 
     StrictMock<mpt::MockServerReaderWriter<mp::ListReply, mp::ListRequest>> mock_server;
@@ -1750,9 +1767,6 @@ TEST_F(Daemon, ctor_drops_removed_instances)
 
     EXPECT_TRUE(call_daemon_slot(daemon, &mp::Daemon::list, mp::ListRequest{}, mock_server).ok());
     EXPECT_THAT(list_reply.instance_list().instances(), stayed_matcher);
-
-    auto updated_json = mpt::load(filename);
-    EXPECT_THAT(updated_json.toStdString(), AllOf(HasSubstr(stayed), Not(HasSubstr(gone))));
 }
 
 TEST_P(ListIP, lists_with_ip)
@@ -2261,6 +2275,49 @@ TEST_F(Daemon, add_bridged_interface_works)
     EXPECT_NO_THROW(daemon.test_add_bridged_interface(instance_name, instance_ptr));
 }
 
+TEST_F(Daemon, add_bridged_interface_warns_and_noop_if_already_bridged)
+{
+    std::string instance_name{"foo"};
+    std::string if_name{"eth8"};
+
+    mp::VMSpecs specs{};
+    specs.extra_interfaces.push_back({if_name, "ab:ab:ab:ab:ab:ab", true});
+
+    auto mock_factory = use_a_mock_vm_factory();
+    mpt::MockDaemon daemon{config_builder.build()};
+    auto instance_ptr = std::make_shared<NiceMock<mpt::MockVirtualMachine>>(instance_name);
+
+    auto logger_scope = mpt::MockLogger::inject();
+    logger_scope.mock_logger->screen_logs(mpl::Level::warning);
+    logger_scope.mock_logger->expect_log(mpl::Level::warning, "already bridged");
+
+    EXPECT_CALL(*mock_factory, networks).Times(1);
+    EXPECT_CALL(*mock_factory, prepare_networking).Times(0);
+    EXPECT_CALL(*instance_ptr, add_network_interface).Times(0);
+
+    EXPECT_NO_THROW(daemon.test_add_bridged_interface(instance_name, instance_ptr, specs));
+}
+
+TEST_F(Daemon, add_bridged_interface_honors_prepared_bridge)
+{
+    std::string instance_name{"asdf"};
+    std::string if_name{"eth8"};
+    std::string br_name{"br-eth8"};
+    mp::NetworkInterface br_net{br_name, "ab:ab:ab:ab:ab:ab", true};
+
+    auto mock_factory = use_a_mock_vm_factory();
+    mpt::MockDaemon daemon{config_builder.build()};
+    auto instance_ptr = std::make_shared<NiceMock<mpt::MockVirtualMachine>>(instance_name);
+
+    std::vector<mp::NetworkInterfaceInfo> net_info{{if_name, "Ethernet", "A regular adapter", {}, false}};
+    EXPECT_CALL(*mock_factory, networks).WillOnce(Return(net_info));
+    EXPECT_CALL(*mock_factory, prepare_networking(Contains(Field(&mp::NetworkInterface::id, StrEq("eth8")))))
+        .WillOnce(SetArgReferee<0>(std::vector{br_net}));
+    EXPECT_CALL(*instance_ptr, add_network_interface(0, _, Eq(br_net))).Times(1);
+
+    EXPECT_NO_THROW(daemon.test_add_bridged_interface(instance_name, instance_ptr));
+}
+
 TEST_F(Daemon, add_bridged_interface_throws_if_backend_throws)
 {
     std::string instance_name{"wonka"};
@@ -2324,24 +2381,28 @@ TEST_F(Daemon, add_bridged_interface_throws_if_needs_authorization)
                          mpt::match_what(msg));
 }
 
-struct DaemonIsBridged : public Daemon, public WithParamInterface<std::pair<std::vector<mp::NetworkInterface>, bool>>
+struct DaemonIsBridged : public Daemon,
+                         public WithParamInterface<
+                             std::tuple<std::vector<mp::NetworkInterfaceInfo>, std::vector<mp::NetworkInterface>, bool>>
 {
 };
 
 TEST_P(DaemonIsBridged, is_bridged_works)
 {
-    const auto [extra_interfaces, result] = GetParam();
+    const auto [host_nets, extra_interfaces, result] = GetParam();
 
     std::string instance_name{"charlie"};
 
-    mp::VMSpecs specs;
+    mp::VMSpecs specs{};
     specs.extra_interfaces = extra_interfaces;
 
+    auto [mock_platform, platform_guard] = mpt::MockPlatform::inject();
+    EXPECT_CALL(*mock_platform, bridge_nomenclature).WillRepeatedly(Return("generic"));
+
     auto mock_factory = use_a_mock_vm_factory();
+    EXPECT_CALL(*mock_factory, networks).WillOnce(Return(host_nets));
     mpt::MockDaemon daemon{config_builder.build()};
     auto instance_ptr = std::make_shared<NiceMock<mpt::MockVirtualMachine>>(instance_name);
-
-    EXPECT_CALL(*mock_factory, bridge_name_for(_)).WillOnce(Return("br-eth8"));
 
     EXPECT_EQ(daemon.test_is_bridged(instance_name, specs), result);
 }
@@ -2349,10 +2410,18 @@ TEST_P(DaemonIsBridged, is_bridged_works)
 INSTANTIATE_TEST_SUITE_P(
     Daemon,
     DaemonIsBridged,
-    Values(std::make_pair(std::vector<mp::NetworkInterface>{{"eth8", "52:54:00:09:10:11", true}}, true),
-           std::make_pair(std::vector<mp::NetworkInterface>{{"br-eth8", "52:54:00:12:13:14", true}}, true),
-           std::make_pair(std::vector<mp::NetworkInterface>{{"eth9", "52:54:00:15:16:17", true}}, false),
-           std::make_pair(std::vector<mp::NetworkInterface>{{"br-eth9", "52:54:00:18:19:20", true}}, false)));
+    Values(std::make_tuple(std::vector<mp::NetworkInterfaceInfo>{},
+                           std::vector<mp::NetworkInterface>{{"eth8", "52:54:00:09:10:11", true}},
+                           true),
+           std::make_tuple(std::vector<mp::NetworkInterfaceInfo>{{"somebr", "generic", "some bridge", {"eth8"}, false}},
+                           std::vector<mp::NetworkInterface>{{"somebr", "52:54:00:12:13:14", true}},
+                           true),
+           std::make_tuple(std::vector<mp::NetworkInterfaceInfo>{},
+                           std::vector<mp::NetworkInterface>{{"eth9", "52:54:00:15:16:17", true}},
+                           false),
+           std::make_tuple(std::vector<mp::NetworkInterfaceInfo>{{"somebr", "generic", "some bridge", {"eth9"}, false}},
+                           std::vector<mp::NetworkInterface>{{"somebr", "52:54:00:18:19:20", true}},
+                           false)));
 
 TEST_F(Daemon, requests_networks)
 {
@@ -2398,15 +2467,19 @@ TEST_F(Daemon, purgePersistsInstances)
     const auto [temp_dir, filename] = plant_instance_json(json_contents);
     config_builder.data_directory = temp_dir->path();
 
+    EXPECT_CALL(mock_json_utils, write_json(_, Eq(filename)))
+        .WillOnce(Return())
+        .WillOnce(Return())
+        .WillOnce(WithArg<0>([&name1, &name2](const QJsonObject& obj) {
+            QJsonDocument doc{obj};
+            EXPECT_THAT(doc.toJson().toStdString(), AllOf(HasSubstr(name1), HasSubstr(name2)));
+        }));
+
     config_builder.vault = std::make_unique<NiceMock<mpt::MockVMImageVault>>();
     mp::Daemon daemon{config_builder.build()};
 
-    QFile::remove(filename);
     call_daemon_slot(daemon, &mp::Daemon::purge, mp::PurgeRequest{},
                      NiceMock<mpt::MockServerReaderWriter<mp::PurgeReply, mp::PurgeRequest>>{});
-
-    auto updated_json = mpt::load(filename);
-    EXPECT_THAT(updated_json.toStdString(), AllOf(HasSubstr(name1), HasSubstr(name2)));
 }
 
 TEST_F(Daemon, launch_fails_with_incompatible_blueprint)

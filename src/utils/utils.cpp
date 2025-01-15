@@ -15,13 +15,14 @@
  *
  */
 
-#include "multipass/exceptions/ssh_exception.h"
 #include <multipass/constants.h>
 #include <multipass/exceptions/autostart_setup_exception.h>
 #include <multipass/exceptions/file_open_failed_exception.h>
+#include <multipass/exceptions/ssh_exception.h>
 #include <multipass/file_ops.h>
 #include <multipass/format.h>
 #include <multipass/logging/log.h>
+#include <multipass/network_interface_info.h>
 #include <multipass/platform.h>
 #include <multipass/ssh/ssh_session.h>
 #include <multipass/standard_paths.h>
@@ -41,6 +42,7 @@
 #include <cassert>
 #include <cctype>
 #include <fstream>
+#include <optional>
 #include <random>
 #include <regex>
 #include <sstream>
@@ -105,12 +107,18 @@ void mp::Utils::make_file_with_content(const std::string& file_name, const std::
         throw std::runtime_error(fmt::format("failed to create dir '{}'", parent_dir.path()));
 
     if (!MP_FILEOPS.open(file, QFile::WriteOnly))
-        throw std::runtime_error(fmt::format("failed to open file '{}' for writing", file_name));
+        throw std::runtime_error(
+            fmt::format("failed to open file '{}' for writing: {}", file_name, file.errorString()));
 
+    // TODO use a QTextStream instead. Theoretically, this may fail to write it all in one go but still succeed.
+    // In practice, that seems unlikely. See https://stackoverflow.com/a/70933650 for more.
     if (MP_FILEOPS.write(file, content.c_str(), content.size()) != (qint64)content.size())
-        throw std::runtime_error(fmt::format("failed to write to file '{}'", file_name));
+        throw std::runtime_error(fmt::format("failed to write to file '{}': {}", file_name, file.errorString()));
 
-    return;
+    if (!MP_FILEOPS.flush(file)) // flush manually to check return (which QFile::close ignores)
+        throw std::runtime_error(fmt::format("failed to flush file '{}': {}", file_name, file.errorString()));
+
+    return; // file closed, flush called again with errors ignored
 }
 
 std::string mp::Utils::get_kernel_version() const
@@ -187,11 +195,6 @@ std::string& mp::utils::trim_newline(std::string& s)
     return s;
 }
 
-std::string mp::utils::escape_char(const std::string& in, char c)
-{
-    return std::regex_replace(in, std::regex({c}), fmt::format("\\{}", c));
-}
-
 // Escape all characters which need to be escaped in the shell.
 std::string mp::utils::escape_for_shell(const std::string& in)
 {
@@ -208,11 +211,11 @@ std::string mp::utils::escape_for_shell(const std::string& in)
 
     for (char c : in)
     {
-        if (0xa == c) // newline
+        if ('\n' == c) // newline
         {
-            *ret_insert++ = 0x22; // double quotes
-            *ret_insert++ = 0xa;  // newline
-            *ret_insert++ = 0x22; // double quotes
+            *ret_insert++ = '"';  // double quotes
+            *ret_insert++ = '\n'; // newline
+            *ret_insert++ = '"';  // double quotes
         }
         else
         {
@@ -220,7 +223,7 @@ std::string mp::utils::escape_for_shell(const std::string& in)
             if (c < 0x25 || c > 0x7a || (c > 0x25 && c < 0x2b) || (c > 0x5a && c < 0x5f) || 0x2c == c || 0x3b == c ||
                 0x3c == c || 0x3e == c || 0x3f == c || 0x60 == c)
             {
-                *ret_insert++ = 0x5c; // backslash
+                *ret_insert++ = '\\'; // backslash
             }
 
             *ret_insert++ = c;
@@ -257,9 +260,9 @@ bool mp::utils::valid_mac_address(const std::string& mac)
 }
 
 // Executes a given command on the given session. Returns the output of the command, with spaces and feeds trimmed.
-std::string mp::Utils::run_in_ssh_session(mp::SSHSession& session, const std::string& cmd) const
+std::string mp::Utils::run_in_ssh_session(mp::SSHSession& session, const std::string& cmd, bool whisper) const
 {
-    auto proc = session.exec(cmd);
+    auto proc = session.exec(cmd, whisper);
 
     if (auto ec = proc.exit_code() != 0)
     {
@@ -518,7 +521,7 @@ std::pair<std::string, std::string> mp::utils::get_path_split(mp::SSHSession& se
 
     std::string existing = MP_UTILS.run_in_ssh_session(
         session,
-        fmt::format("sudo /bin/bash -c 'P=\"{}\"; while [ ! -d \"$P/\" ]; do P=\"${{P%/*}}\"; done; echo $P/'",
+        fmt::format("sudo /bin/bash -c 'P={:?}; while [ ! -d \"$P/\" ]; do P=\"${{P%/*}}\"; done; echo $P/'",
                     absolute));
 
     return {existing,
@@ -529,7 +532,7 @@ std::pair<std::string, std::string> mp::utils::get_path_split(mp::SSHSession& se
 void mp::utils::make_target_dir(mp::SSHSession& session, const std::string& root, const std::string& relative_target)
 {
     MP_UTILS.run_in_ssh_session(session,
-                                fmt::format("sudo /bin/bash -c 'cd \"{}\" && mkdir -p \"{}\"'", root, relative_target));
+                                fmt::format("sudo /bin/bash -c 'cd {:?} && mkdir -p {:?}'", root, relative_target));
 }
 
 // Set ownership of all directories on a path starting on a given root.
@@ -538,7 +541,7 @@ void mp::utils::set_owner_for(mp::SSHSession& session, const std::string& root, 
                               int vm_user, int vm_group)
 {
     MP_UTILS.run_in_ssh_session(session,
-                                fmt::format("sudo /bin/bash -c 'cd \"{}\" && chown -R {}:{} \"{}\"'",
+                                fmt::format("sudo /bin/bash -c 'cd {:?} && chown -R {}:{} {:?}'",
                                             root,
                                             vm_user,
                                             vm_group,
@@ -572,4 +575,21 @@ bool mp::Utils::is_ipv4_valid(const std::string& ipv4) const
     }
 
     return true;
+}
+
+mp::Path mp::Utils::default_mount_target(const Path& source) const
+{
+    return source.isEmpty() ? "" : QDir{QDir::cleanPath(source)}.dirName().prepend("/home/ubuntu/");
+}
+
+auto mp::utils::find_bridge_with(const std::vector<mp::NetworkInterfaceInfo>& networks,
+                                 const std::string& target_network,
+                                 const std::string& bridge_type) -> std::optional<mp::NetworkInterfaceInfo>
+{
+    const auto it = std::find_if(std::cbegin(networks),
+                                 std::cend(networks),
+                                 [&target_network, &bridge_type](const NetworkInterfaceInfo& info) {
+                                     return info.type == bridge_type && info.has_link(target_network);
+                                 });
+    return it == std::cend(networks) ? std::nullopt : std::make_optional(*it);
 }

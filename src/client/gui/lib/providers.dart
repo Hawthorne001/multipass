@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:basics/basics.dart';
 import 'package:built_collection/built_collection.dart';
+import 'package:collection/collection.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fpdart/fpdart.dart';
 import 'package:grpc/grpc.dart';
@@ -13,6 +14,8 @@ import 'grpc_client.dart';
 import 'logger.dart';
 
 export 'grpc_client.dart';
+
+late final ProviderContainer providerContainer;
 
 final grpcClientProvider = Provider((_) {
   final address = getServerAddress();
@@ -39,12 +42,9 @@ final vmInfosStreamProvider = StreamProvider<List<VmInfo>>((ref) async* {
   // this is to de-duplicate errors received from the stream
   Object? lastError;
   while (true) {
-    final timer = Future.delayed(900.milliseconds);
+    final timer = Future.delayed(1900.milliseconds);
     try {
-      final infos = await grpcClient.info();
-      yield infos
-          .where((info) => info.instanceStatus.status != Status.DELETED)
-          .toList();
+      yield await grpcClient.info();
       lastError = null;
     } catch (error, stackTrace) {
       if (error != lastError) {
@@ -53,11 +53,9 @@ final vmInfosStreamProvider = StreamProvider<List<VmInfo>>((ref) async* {
       }
       lastError = error;
     }
+    // these two timers make it so that requests are sent with at least a 2s pause between them
+    // but if the request takes longer than 1.9s to complete, we still wait 100ms before sending the next one
     await timer;
-    // this is so that if the request takes less than 900 milliseconds, it waits the rest of the 900 that remain plus 100 milliseconds
-    // this is so that there is 1 second pause between requests that take less than 1 second
-    // but if the timer is done before the request completes, it still waits at least 100 milliseconds before the next request
-    // so that it does not spam the daemon if requests take longer to complete
     await Future.delayed(100.milliseconds);
   }
 });
@@ -70,19 +68,40 @@ final daemonAvailableProvider = Provider((ref) {
     if (message.contains('failed to obtain exit status for remote process')) {
       return true;
     }
-    if (message.contains('Connection is being forcefully terminated')) {
-      return true;
-    }
   }
   return false;
 });
 
+class AllVmInfosNotifier extends Notifier<List<DetailedInfoItem>> {
+  @override
+  List<DetailedInfoItem> build() {
+    return ref.watch(vmInfosStreamProvider).valueOrNull ?? const [];
+  }
+
+  Future<void> update() async {
+    state = await ref.read(grpcClientProvider).info();
+  }
+}
+
+final allVmInfosProvider =
+    NotifierProvider<AllVmInfosNotifier, List<DetailedInfoItem>>(
+        AllVmInfosNotifier.new);
+
 final vmInfosProvider = Provider((ref) {
-  return ref.watch(vmInfosStreamProvider).valueOrNull ?? const [];
+  final existingVms = ref
+      .watch(allVmInfosProvider)
+      .where((info) => info.instanceStatus.status != Status.DELETED)
+      .toBuiltList();
+  final existingVmNames = existingVms.map((i) => i.name).toSet();
+  final launchingVms = ref.watch(launchingVmsProvider).where((info) {
+    return !existingVmNames.contains(info.name);
+  });
+
+  return existingVms.concat(launchingVms).sortedBy((i) => i.name).toList();
 });
 
 final vmInfosMapProvider = Provider((ref) {
-  return {for (final info in ref.watch(vmInfosProvider)) info.name: info};
+  return {for (final i in ref.watch(vmInfosProvider)) i.name: i};
 });
 
 class VmInfoNotifier
@@ -106,6 +125,64 @@ final vmStatusesProvider = Provider((ref) {
 final vmNamesProvider = Provider((ref) {
   return ref.watch(vmStatusesProvider).keys.toBuiltSet();
 });
+
+final deletedVmsProvider = Provider((ref) {
+  return ref
+      .watch(allVmInfosProvider)
+      .where((info) => info.instanceStatus.status == Status.DELETED)
+      .map((info) => info.name)
+      .toBuiltSet();
+});
+
+class LaunchingVmsNotifier extends Notifier<BuiltList<DetailedInfoItem>> {
+  @override
+  BuiltList<DetailedInfoItem> build() {
+    final vms = stateOrNull ?? BuiltList();
+
+    return vms;
+  }
+
+  void add(LaunchRequest request) {
+    final vms = state;
+    state = vms.rebuild((builder) {
+      builder.add(DetailedInfoItem(
+        name: request.instanceName,
+        cpuCount: request.numCores.toString(),
+        diskTotal: request.diskSpace,
+        memoryTotal: request.memSize,
+        instanceInfo: InstanceDetails(
+          currentRelease: request.image,
+        ),
+      ));
+    });
+  }
+
+  void remove(String name) {
+    final vms = state;
+    state = vms.rebuild((builder) {
+      builder.removeWhere((info) => info.name == name);
+    });
+  }
+
+  @override
+  bool updateShouldNotify(
+    BuiltList<DetailedInfoItem> previous,
+    BuiltList<DetailedInfoItem> next,
+  ) {
+    return previous != next;
+  }
+}
+
+final launchingVmsProvider =
+    NotifierProvider<LaunchingVmsNotifier, BuiltList<DetailedInfoItem>>(
+        LaunchingVmsNotifier.new);
+
+final isLaunchingProvider = Provider.autoDispose.family<bool, String>(
+  (ref, name) {
+    final launchingVms = ref.watch(launchingVmsProvider);
+    return launchingVms.any((info) => info.name == name);
+  },
+);
 
 class ClientSettingNotifier extends AutoDisposeFamilyNotifier<String, String> {
   final file = File(settingsFile());
@@ -164,6 +241,42 @@ const privilegedMountsKey = 'local.privileged-mounts';
 const passphraseKey = 'local.passphrase';
 final daemonSettingProvider = AsyncNotifierProvider.autoDispose
     .family<DaemonSettingNotifier, String, String>(DaemonSettingNotifier.new);
+
+enum VmResource { cpus, memory, disk, bridged }
+
+typedef VmResourceKey = ({String name, VmResource resource});
+
+class VmResourceNotifier
+    extends AutoDisposeFamilyAsyncNotifier<String, VmResourceKey> {
+  @override
+  Future<String> build(VmResourceKey arg) async {
+    final (:name, :resource) = arg;
+    final launchingVm = ref.watch(launchingVmsProvider.select((infos) {
+      return infos.firstWhereOrNull((info) => info.name == name);
+    }));
+
+    if (launchingVm != null) {
+      return switch (resource) {
+        VmResource.cpus => launchingVm.cpuCount,
+        VmResource.memory => launchingVm.memoryTotal,
+        VmResource.disk => launchingVm.diskTotal,
+        VmResource.bridged => 'false',
+      };
+    }
+
+    final key = 'local.$name.${resource.name}';
+    return await ref.watch(daemonSettingProvider(key).future);
+  }
+
+  Future<void> set(String value) async {
+    final (:name, :resource) = arg;
+    final key = 'local.$name.${resource.name}';
+    ref.read(daemonSettingProvider(key).notifier).set(value);
+  }
+}
+
+final vmResourceProvider = AsyncNotifierProvider.autoDispose
+    .family<VmResourceNotifier, String, VmResourceKey>(VmResourceNotifier.new);
 
 class GuiSettingNotifier extends AutoDisposeFamilyNotifier<String?, String> {
   final SharedPreferences sharedPreferences;

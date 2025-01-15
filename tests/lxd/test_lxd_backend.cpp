@@ -37,6 +37,7 @@
 #include <multipass/auto_join_thread.h>
 #include <multipass/exceptions/local_socket_connection_exception.h>
 #include <multipass/exceptions/start_exception.h>
+#include <multipass/exceptions/virtual_machine_state_exceptions.h>
 #include <multipass/format.h>
 #include <multipass/memory_size.h>
 #include <multipass/network_interface_info.h>
@@ -1690,16 +1691,18 @@ TEST_F(LXDBackend, shutdown_while_stopped_does_nothing_and_logs_debug)
     EXPECT_CALL(mock_monitor, persist_state_for(_, _));
     EXPECT_CALL(
         *logger_scope.mock_logger,
-        log(Eq(mpl::Level::debug), mpt::MockLogger::make_cstring_matcher(StrEq("pied-piper-valley")),
-            mpt::MockLogger::make_cstring_matcher(StrEq("Ignoring stop request since instance is already stopped"))));
+        log(Eq(mpl::Level::info),
+            mpt::MockLogger::make_cstring_matcher(StrEq("pied-piper-valley")),
+            mpt::MockLogger::make_cstring_matcher(StrEq("Ignoring shutdown since instance is already stopped."))));
 
     machine.shutdown();
 
     EXPECT_EQ(machine.current_state(), mp::VirtualMachine::State::stopped);
 }
 
-TEST_F(LXDBackend, shutdown_while_frozen_does_nothing_and_logs_info)
+TEST_F(LXDBackend, shutdown_while_frozen_throws_and_logs_info)
 {
+    const std::string sub_error_msg{"Cannot shut down suspended instance"};
     mpt::MockVMStatusMonitor mock_monitor;
 
     EXPECT_CALL(*mock_network_access_manager, createRequest(_, _, _)).WillRepeatedly([](auto, auto request, auto) {
@@ -1726,11 +1729,8 @@ TEST_F(LXDBackend, shutdown_while_frozen_does_nothing_and_logs_info)
     ASSERT_EQ(machine.current_state(), mp::VirtualMachine::State::suspended);
 
     EXPECT_CALL(mock_monitor, persist_state_for(_, _));
-    EXPECT_CALL(*logger_scope.mock_logger,
-                log(Eq(mpl::Level::info), mpt::MockLogger::make_cstring_matcher(StrEq("pied-piper-valley")),
-                    mpt::MockLogger::make_cstring_matcher(StrEq("Ignoring shutdown issued while suspended"))));
 
-    machine.shutdown();
+    MP_EXPECT_THROW_THAT(machine.shutdown(), mp::VMStateInvalidException, mpt::match_what(HasSubstr(sub_error_msg)));
 
     EXPECT_EQ(machine.current_state(), mp::VirtualMachine::State::suspended);
 }
@@ -1843,9 +1843,11 @@ TEST_F(LXDBackend, shutdown_while_starting_throws_and_sets_correct_state)
 
     ASSERT_EQ(machine.state, mp::VirtualMachine::State::starting);
 
-    mp::AutoJoinThread thread = [&machine] { machine.shutdown(); };
+    mp::AutoJoinThread thread = [&machine] {
+        machine.shutdown(mp::VirtualMachine::ShutdownPolicy::Poweroff);
+    }; // force shutdown
 
-    while (machine.state != mp::VirtualMachine::State::stopped)
+    while (machine.state != mp::VirtualMachine::State::off)
         std::this_thread::sleep_for(1ms);
 
     MP_EXPECT_THROW_THAT(machine.ensure_vm_is_running(1ms), mp::StartException,
@@ -2318,8 +2320,7 @@ public:
     using mp::LXDVirtualMachineFactory::create_bridge_with;
     using mp::LXDVirtualMachineFactory::LXDVirtualMachineFactory;
 
-    MOCK_METHOD(void, prepare_networking_guts,
-                (std::vector<mp::NetworkInterface> & extra_interfaces, const std::string& bridge_type), (override));
+    MOCK_METHOD(void, prepare_networking, (std::vector<mp::NetworkInterface>&), (override));
 };
 } // namespace
 
@@ -2329,7 +2330,7 @@ TEST_F(LXDBackend, prepares_networking_via_base_factory)
     std::vector<mp::NetworkInterface> extra_networks{{"netid", "mac", false}};
 
     auto address = [](const auto& v) { return &v; }; // replace with Address matcher once available
-    EXPECT_CALL(backend, prepare_networking_guts(ResultOf(address, Eq(&extra_networks)), Eq("bridge")));
+    EXPECT_CALL(backend, prepare_networking(ResultOf(address, Eq(&extra_networks))));
     backend.prepare_networking(extra_networks);
 }
 
@@ -2404,20 +2405,15 @@ TEST_F(LXDBackend, addsNetworkInterface)
     EXPECT_EQ(patch_times_called, 1u);
 }
 
-struct LXDNetworkNameTestSuite : LXDBackend, WithParamInterface<std::pair<std::string, std::string>>
+TEST_F(LXDBackend, converts_http_to_https)
 {
-};
+    mpt::StubVMStatusMonitor stub_monitor;
 
-TEST_P(LXDNetworkNameTestSuite, backendReturnsCorrectBridgeName)
-{
-    const auto [name, ret] = GetParam();
+    EXPECT_CALL(*mock_network_access_manager, createRequest(_, _, _)).WillRepeatedly([](auto, auto request, auto) {
+        EXPECT_EQ(request.url().scheme(), "https");
+        return new mpt::MockLocalSocketReply(mpt::stop_vm_data);
+    });
 
-    CustomLXDFactory factory{std::move(mock_network_access_manager), data_dir.path(), base_url};
-
-    EXPECT_EQ(factory.bridge_name_for(name), ret);
+    mp::LXDVirtualMachineFactory backend{std::move(mock_network_access_manager), data_dir.path(), QUrl{"http://bar"}};
+    backend.create_virtual_machine(default_description, key_provider, stub_monitor);
 }
-
-INSTANTIATE_TEST_SUITE_P(LXDBackend,
-                         LXDNetworkNameTestSuite,
-                         Values(std::make_pair("enp4s0", "br-enp4s0"),
-                                std::make_pair("enx586d8fd35b6c", "br-enx586d8fd35")));

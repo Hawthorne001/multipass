@@ -1,3 +1,4 @@
+import 'package:basics/int_basics.dart';
 import 'package:built_collection/built_collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,10 +17,11 @@ class _NotificationListState extends ConsumerState<NotificationList> {
   final activeNotifications = <Widget>[];
 
   void updateState(BuiltList<Widget> notifications) {
-    if (notifications.length > activeNotifications.length) {
-      listKey.currentState?.insertItem(activeNotifications.length);
-      activeNotifications.add(notifications[activeNotifications.length]);
+    for (var i = activeNotifications.length; i < notifications.length; i++) {
+      listKey.currentState?.insertItem(i);
+      activeNotifications.add(notifications[i]);
     }
+
     for (var i = activeNotifications.length - 1; i >= 0; i--) {
       if (notifications.contains(activeNotifications[i])) continue;
       final notification = activeNotifications.removeAt(i);
@@ -84,14 +86,24 @@ class NotificationTile extends ConsumerWidget {
           onInvoke: (_) => removeSelf(ref),
         ),
       },
-      child: Container(
-        margin: const EdgeInsets.all(5),
-        height: 70,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          boxShadow: [BoxShadow(blurRadius: 5, color: Colors.black38)],
+      child: AnimatedSize(
+        alignment: Alignment.topCenter,
+        duration: 250.milliseconds,
+        child: IntrinsicHeight(
+          child: Container(
+            margin: const EdgeInsets.all(5),
+            constraints: const BoxConstraints(minHeight: 60),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              boxShadow: [BoxShadow(blurRadius: 5, color: Colors.black38)],
+            ),
+            child: DefaultTextStyle.merge(
+              maxLines: 10,
+              overflow: TextOverflow.ellipsis,
+              child: notification,
+            ),
+          ),
         ),
-        child: notification,
       ),
     );
   }
