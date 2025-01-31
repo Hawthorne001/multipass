@@ -21,6 +21,7 @@
 #include <multipass/exceptions/create_image_exception.h>
 #include <multipass/exceptions/image_vault_exceptions.h>
 #include <multipass/exceptions/unsupported_image_exception.h>
+#include <multipass/file_ops.h>
 #include <multipass/json_utils.h>
 #include <multipass/logging/log.h>
 #include <multipass/platform.h>
@@ -30,7 +31,6 @@
 #include <multipass/url_downloader.h>
 #include <multipass/utils.h>
 #include <multipass/vm_image.h>
-#include <multipass/xz_image_decoder.h>
 
 #include <multipass/format.h>
 
@@ -170,7 +170,10 @@ void remove_source_images(const mp::VMImage& source_image, const mp::VMImage& pr
 {
     // The prepare phase may have been a no-op, check and only remove source images
     if (source_image.image_path != prepared_image.image_path)
-        mp::vault::delete_file(source_image.image_path);
+    {
+        QFile source_file{source_image.image_path};
+        MP_FILEOPS.remove(source_file);
+    }
 }
 
 void delete_image_dir(const mp::Path& image_path)
@@ -295,7 +298,7 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type,
         }
 
         vm_image = prepare(source_image);
-        vm_image.id = mp::vault::compute_image_hash(vm_image.image_path).toStdString();
+        vm_image.id = MP_IMAGE_VAULT_UTILS.compute_file_hash(vm_image.image_path).toStdString();
 
         remove_source_images(source_image, vm_image);
 
@@ -356,7 +359,8 @@ mp::VMImage mp::DefaultVMImageVault::fetch_image(const FetchType& fetch_type,
                                        last_modified.toString(),
                                        0,
                                        checksum.has_value()};
-                const auto image_filename = mp::vault::filename_for(image_url.path());
+
+                const auto image_filename = QFileInfo{image_url.path()}.fileName();
                 // Attempt to make a sane directory name based on the filename of the image
 
                 const auto image_dir_name =
@@ -582,6 +586,30 @@ mp::MemorySize mp::DefaultVMImageVault::minimum_image_size_for(const std::string
 
     throw std::runtime_error(fmt::format("Cannot determine minimum image size for id \'{}\'", id));
 }
+void mp::DefaultVMImageVault::clone(const std::string& source_instance_name,
+                                    const std::string& destination_instance_name)
+{
+    const auto source_iter = instance_image_records.find(source_instance_name);
+
+    if (source_iter == instance_image_records.end())
+    {
+        throw std::runtime_error(source_instance_name + " does not exist in the image records");
+    }
+
+    if (instance_image_records.find(destination_instance_name) != instance_image_records.end())
+    {
+        throw std::runtime_error(destination_instance_name + " already exists in the image records");
+    }
+
+    auto& dest_vault_record = instance_image_records[destination_instance_name] =
+        instance_image_records[source_instance_name];
+
+    // string replacement is "instances/<src_name>"->"instances/<dest_name>" instead of
+    // "<src_name>"->"<dest_name>", because the second one might match other substrings of the metadata.
+    dest_vault_record.image.image_path.replace("instances/" + QString{source_instance_name.c_str()},
+                                               "instances/" + QString{destination_instance_name.c_str()});
+    persist_instance_records();
+}
 
 mp::VMImage mp::DefaultVMImageVault::download_and_prepare_source_image(
     const VMImageInfo& info, std::optional<VMImage>& existing_source_image, const QDir& image_dir,
@@ -596,8 +624,10 @@ mp::VMImage mp::DefaultVMImageVault::download_and_prepare_source_image(
     }
     else
     {
+        QFileInfo file_info{info.image_location};
+
         source_image.id = id.toStdString();
-        source_image.image_path = image_dir.filePath(mp::vault::filename_for(info.image_location));
+        source_image.image_path = image_dir.filePath(file_info.fileName());
         source_image.original_release = info.release_title.toStdString();
         source_image.release_date = info.version.toStdString();
 
@@ -618,12 +648,12 @@ mp::VMImage mp::DefaultVMImageVault::download_and_prepare_source_image(
         {
             mpl::log(mpl::Level::debug, category, fmt::format("Verifying hash \"{}\"", id));
             monitor(LaunchProgress::VERIFY, -1);
-            mp::vault::verify_image_download(source_image.image_path, id);
+            MP_IMAGE_VAULT_UTILS.verify_file_hash(source_image.image_path, id);
         }
 
         if (source_image.image_path.endsWith(".xz"))
         {
-            source_image.image_path = mp::vault::extract_image(source_image.image_path, monitor, true);
+            source_image.image_path = MP_IMAGE_VAULT_UTILS.extract_file(source_image.image_path, monitor, true);
         }
 
         auto prepared_image = prepare(source_image);
@@ -650,14 +680,14 @@ QString mp::DefaultVMImageVault::extract_image_from(const VMImage& source_image,
     const auto image_name = file_info.fileName().remove(".xz");
     const auto image_path = QDir(dest_dir).filePath(image_name);
 
-    return mp::vault::extract_image(image_path, monitor);
+    return MP_IMAGE_VAULT_UTILS.extract_file(image_path, monitor);
 }
 
 mp::VMImage mp::DefaultVMImageVault::image_instance_from(const VMImage& prepared_image, const mp::Path& dest_dir)
 {
     MP_UTILS.make_dir(dest_dir);
 
-    return {mp::vault::copy(prepared_image.image_path, dest_dir),
+    return {MP_IMAGE_VAULT_UTILS.copy_to_dir(prepared_image.image_path, dest_dir),
             prepared_image.id,
             prepared_image.original_release,
             prepared_image.current_release,

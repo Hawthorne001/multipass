@@ -19,12 +19,12 @@
 #include "multipass/virtual_machine.h"
 
 #include <multipass/cloud_init_iso.h>
+#include <multipass/constants.h>
 #include <multipass/file_ops.h>
 #include <multipass/json_utils.h>
 #include <multipass/virtual_machine_description.h>
 #include <multipass/vm_mount.h>
 #include <multipass/vm_specs.h>
-
 #include <scope_guard.hpp>
 
 #include <QJsonArray>
@@ -193,9 +193,9 @@ mp::BaseSnapshot::BaseSnapshot(const QJsonObject& json, VirtualMachine& vm, cons
           json["comment"].toString().toStdString(), // comment
           choose_cloud_init_instance_id(json,
                                         std::filesystem::path{vm.instance_directory().absolutePath().toStdString()} /
-                                            "cloud-init-config.iso"), // instance id from cloud init
-          find_parent(json, vm),                                      // parent
-          json["index"].toInt(),                                      // index
+                                            cloud_init_file_name), // instance id from cloud init
+          find_parent(json, vm),                                   // parent
+          json["index"].toInt(),                                   // index
           QDateTime::fromString(json["creation_timestamp"].toString(), Qt::ISODateWithMs), // creation_timestamp
           json["num_cores"].toInt(),                                                       // num_cores
           MemorySize{json["mem_size"].toString().toStdString()},                           // mem_size
@@ -267,7 +267,7 @@ auto mp::BaseSnapshot::erase_helper()
     auto deleting_filepath = tmp_dir->filePath(snapshot_filename);
 
     QFile snapshot_file{snapshot_filepath};
-    if (!MP_FILEOPS.rename(snapshot_file, deleting_filepath) && snapshot_file.exists())
+    if (!MP_FILEOPS.rename(snapshot_file, deleting_filepath) && MP_FILEOPS.exists(snapshot_file))
         throw std::runtime_error{
             fmt::format("Failed to move snapshot file to temporary destination: {}", deleting_filepath)};
 

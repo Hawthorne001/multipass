@@ -1,8 +1,7 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
+import 'package:local_notifier/local_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -13,32 +12,42 @@ import 'help.dart';
 import 'logger.dart';
 import 'notifications.dart';
 import 'providers.dart';
+import 'settings/hotkey.dart';
 import 'settings/settings.dart';
 import 'sidebar.dart';
 import 'tray_menu.dart';
+import 'vm_details/mapping_slider.dart';
 import 'vm_details/vm_details.dart';
 import 'vm_table/vm_table_screen.dart';
+import 'window_size.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await setupLogger();
 
+  await localNotifier.setup(
+    appName: 'Multipass',
+    shortcutPolicy: ShortcutPolicy.requireCreate, // Only for Windows
+  );
+
+  final sharedPreferences = await SharedPreferences.getInstance();
   await windowManager.ensureInitialized();
-  const windowOptions = WindowOptions(
-    minimumSize: Size(1000, 600),
-    size: Size(1400, 800),
+  final windowOptions = WindowOptions(
+    center: true,
+    minimumSize: const Size(750, 450),
+    size: await deriveWindowSize(sharedPreferences),
     title: 'Multipass',
   );
+
   await windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.show();
     await windowManager.focus();
   });
 
   await hotKeyManager.unregisterAll();
-  final sharedPreferences = await SharedPreferences.getInstance();
 
-  final providerContainer = ProviderContainer(overrides: [
+  providerContainer = ProviderContainer(overrides: [
     guiSettingProvider.overrideWith(() {
       return GuiSettingNotifier(sharedPreferences);
     }),
@@ -80,9 +89,13 @@ class _AppState extends ConsumerState<App> with WindowListener {
       children: widgets.entries.map((e) {
         final MapEntry(:key, value: widget) = e;
         final isCurrent = key == currentKey;
+        var maintainState = key != SettingsScreen.sidebarKey;
+        if (key.startsWith('vm-')) {
+          maintainState = ref.read(vmVisitedProvider(key));
+        }
         return Visibility(
           key: Key(key),
-          maintainState: key != SettingsScreen.sidebarKey,
+          maintainState: maintainState,
           visible: isCurrent,
           child: FocusScope(
             autofocus: isCurrent,
@@ -93,6 +106,8 @@ class _AppState extends ConsumerState<App> with WindowListener {
         );
       }).toList(),
     );
+
+    final hotkey = ref.watch(hotkeyProvider);
 
     return Stack(children: [
       AnimatedPositioned(
@@ -105,13 +120,26 @@ class _AppState extends ConsumerState<App> with WindowListener {
             : SideBar.collapsedWidth,
         child: content,
       ),
-      const SideBar(),
+      CallbackGlobalShortcuts(
+        key: hotkey != null ? GlobalObjectKey(hotkey) : null,
+        bindings: {if (hotkey != null) hotkey: goToPrimary},
+        child: const SideBar(),
+      ),
       const Align(
         alignment: Alignment.bottomRight,
-        child: SizedBox(width: 300, child: NotificationList()),
+        child: SizedBox(width: 400, child: NotificationList()),
       ),
       const DaemonUnavailable(),
     ]);
+  }
+
+  void goToPrimary() {
+    final vms = ref.read(vmNamesProvider);
+    final primary = ref.read(clientSettingProvider(primaryNameKey));
+    if (vms.contains(primary)) {
+      ref.read(sidebarKeyProvider.notifier).set('vm-$primary');
+      windowManager.showAndRestore();
+    }
   }
 
   @override
@@ -127,27 +155,35 @@ class _AppState extends ConsumerState<App> with WindowListener {
     super.dispose();
   }
 
+  // this event handler is called continuously during a window resizing operation
+  // so we want to save the data to the disk only after the resizing stops
   @override
-  void onWindowClose() {
+  void onWindowResize() => saveWindowSizeTimer.reset();
+
+  @override
+  void onWindowClose() async {
+    if (!await windowManager.isPreventClose()) return;
     final daemonAvailable = ref.read(daemonAvailableProvider);
     final vmsRunning =
         ref.read(vmStatusesProvider).values.contains(Status.RUNNING);
-    if (!daemonAvailable || !vmsRunning) exit(0);
+    if (!daemonAvailable || !vmsRunning) windowManager.destroy();
 
     stopAllInstances() {
-      final notification = OperationNotification(
-        text: 'Stopping all instances',
-        future: ref.read(grpcClientProvider).stop([]).then((_) {
+      final notificationsNotifier = ref.read(notificationsProvider.notifier);
+      notificationsNotifier.addOperation(
+        ref.read(grpcClientProvider).stop([]),
+        loading: 'Stopping all instances',
+        onError: (error) => 'Failed to stop all instances: $error',
+        onSuccess: (_) {
           windowManager.destroy();
           return 'Stopped all instances';
-        }).onError((_, __) => throw 'Failed to stop all instances'),
+        },
       );
-      ref.read(notificationsProvider.notifier).add(notification);
     }
 
     switch (ref.read(guiSettingProvider(onAppCloseKey))) {
       case 'nothing':
-        exit(0);
+        windowManager.destroy();
       case 'stop':
         stopAllInstances();
       default:
@@ -178,13 +214,20 @@ class _AppState extends ConsumerState<App> with WindowListener {
 final theme = ThemeData(
   useMaterial3: false,
   fontFamily: 'Ubuntu',
+  fontFamilyFallback: ['NotoColorEmoji', 'FreeSans'],
   inputDecorationTheme: const InputDecorationTheme(
-    border: OutlineInputBorder(borderRadius: BorderRadius.zero),
-    isDense: true,
-    focusedBorder: OutlineInputBorder(
+    contentPadding: EdgeInsets.symmetric(vertical: 16, horizontal: 6),
+    fillColor: Color(0xfff2f2f2),
+    filled: true,
+    focusedBorder: UnderlineInputBorder(
+      borderSide: BorderSide(width: 2),
       borderRadius: BorderRadius.zero,
-      borderSide: BorderSide(),
     ),
+    enabledBorder: UnderlineInputBorder(
+      borderSide: BorderSide(width: 2),
+      borderRadius: BorderRadius.zero,
+    ),
+    isDense: true,
     suffixIconColor: Colors.black,
   ),
   outlinedButtonTheme: OutlinedButtonThemeData(
@@ -196,11 +239,7 @@ final theme = ThemeData(
         borderRadius: BorderRadius.circular(2),
       ),
       side: const BorderSide(color: Color(0xff333333)),
-      textStyle: const TextStyle(
-        fontFamily: 'Ubuntu',
-        fontSize: 16,
-        fontWeight: FontWeight.w300,
-      ),
+      textStyle: const TextStyle(fontFamily: 'Ubuntu', fontSize: 16),
     ),
   ),
   scaffoldBackgroundColor: Colors.white,
@@ -213,11 +252,7 @@ final theme = ThemeData(
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(2),
       ),
-      textStyle: const TextStyle(
-        fontFamily: 'Ubuntu',
-        fontSize: 16,
-        fontWeight: FontWeight.w300,
-      ),
+      textStyle: const TextStyle(fontFamily: 'Ubuntu', fontSize: 16),
     ),
   ),
   textSelectionTheme: const TextSelectionThemeData(
@@ -241,5 +276,15 @@ final theme = ThemeData(
       fontWeight: FontWeight.bold,
     ),
     tabAlignment: TabAlignment.start,
+  ),
+  sliderTheme: SliderThemeData(
+    activeTrackColor: Color(0xff0066cc),
+    inactiveTrackColor: Color(0xffd9d9d9),
+    overlayShape: SliderComponentShape.noThumb,
+    thumbColor: Colors.white,
+    thumbShape: CustomThumbShape(),
+    tickMarkShape: SliderTickMarkShape.noTickMark,
+    trackHeight: 2,
+    trackShape: CustomTrackShape(),
   ),
 );

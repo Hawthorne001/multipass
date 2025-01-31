@@ -129,6 +129,19 @@ struct MockDaemon : public Daemon
                  (grpc::ServerReaderWriterInterface<RestoreReply, RestoreRequest>*),
                  std::promise<grpc::Status>*),
                 (override));
+    MOCK_METHOD(void,
+                clone,
+                (const CloneRequest*,
+                 (grpc::ServerReaderWriterInterface<CloneReply, CloneRequest>*),
+                 std::promise<grpc::Status>*),
+                (override));
+
+    MOCK_METHOD(void,
+                daemon_info,
+                (const DaemonInfoRequest*,
+                 (grpc::ServerReaderWriterInterface<DaemonInfoReply, DaemonInfoRequest>*),
+                 std::promise<grpc::Status>*),
+                (override));
 
     template <typename Request, typename Reply>
     void set_promise_value(const Request*, grpc::ServerReaderWriterInterface<Reply, Request>*,
@@ -138,9 +151,12 @@ struct MockDaemon : public Daemon
     }
 
     // The following functions are meant to test daemon's bridging functions.
-    // This tests bridged interface addition. The second parameter gives an instance to test on.
-    void test_add_bridged_interface(const std::string& instance_name, const VirtualMachine::ShPtr instance)
+    // This tests bridged interface addition.
+    void test_add_bridged_interface(const std::string& instance_name,
+                                    const VirtualMachine::ShPtr instance,
+                                    const VMSpecs& specs = {})
     {
+        vm_instance_specs.emplace(instance_name, specs);
         operative_instances.insert(std::make_pair(instance_name, instance));
 
         return add_bridged_interface(instance_name);

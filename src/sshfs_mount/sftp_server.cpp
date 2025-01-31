@@ -206,7 +206,7 @@ void check_sshfs_status(mp::SSHSession& session, mp::SSHProcess& sshfs_process)
 auto create_sshfs_process(mp::SSHSession& session, const std::string& sshfs_exec_line, const std::string& source,
                           const std::string& target)
 {
-    auto sshfs_process = session.exec(fmt::format("sudo {} :\"{}\" \"{}\"", sshfs_exec_line, source, target));
+    auto sshfs_process = session.exec(fmt::format("sudo {} :{:?} {:?}", sshfs_exec_line, source, target));
 
     check_sshfs_status(session, sshfs_process);
 
@@ -235,12 +235,16 @@ int reverse_id_for(const mp::id_mappings& id_maps, const int id, const int defau
 }
 } // namespace
 
-mp::SftpServer::SftpServer(SSHSession&& session, const std::string& source, const std::string& target,
-                           const id_mappings& gid_mappings, const id_mappings& uid_mappings, int default_uid,
-                           int default_gid, const std::string& sshfs_exec_line)
+mp::SftpServer::SftpServer(SSHSession&& session,
+                           const std::string& source,
+                           const std::string& target,
+                           const id_mappings& gid_mappings,
+                           const id_mappings& uid_mappings,
+                           int default_uid,
+                           int default_gid,
+                           const std::string& sshfs_exec_line)
     : ssh_session{std::move(session)},
-      sshfs_process{create_sshfs_process(ssh_session, sshfs_exec_line, mp::utils::escape_char(source, '"'),
-                                         mp::utils::escape_char(target, '"'))},
+      sshfs_process{create_sshfs_process(ssh_session, sshfs_exec_line, source, target)},
       sftp_server_session{make_sftp_session(ssh_session, sshfs_process->release_channel())},
       source_path{source},
       target_path{target},
@@ -440,9 +444,7 @@ void mp::SftpServer::run()
                     ssh_session.exec(fmt::format("sudo umount {}", mount_path));
                 }
 
-                sshfs_process =
-                    create_sshfs_process(ssh_session, sshfs_exec_line, mp::utils::escape_char(source_path, '"'),
-                                         mp::utils::escape_char(target_path, '"'));
+                sshfs_process = create_sshfs_process(ssh_session, sshfs_exec_line, source_path, target_path);
                 sftp_server_session = make_sftp_session(ssh_session, sshfs_process->release_channel());
 
                 continue;
@@ -529,13 +531,11 @@ int mp::SftpServer::handle_mkdir(sftp_client_message msg)
         return reply_failure(msg);
     }
 
-    std::error_code err;
-    MP_FILEOPS.permissions(filename, static_cast<fs::perms>(msg->attr->permissions), err);
-    if (err)
+    if (!MP_PLATFORM.set_permissions(filename, static_cast<fs::perms>(msg->attr->permissions)))
     {
         mpl::log(mpl::Level::trace,
                  category,
-                 fmt::format("{}: set permissions failed for '{}': {}", __FUNCTION__, filename, err.message()));
+                 fmt::format("{}: set permissions failed for '{}'", __FUNCTION__, filename));
         return reply_failure(msg);
     }
 
@@ -962,7 +962,7 @@ int mp::SftpServer::handle_rename(sftp_client_message msg)
 
 int mp::SftpServer::handle_setstat(sftp_client_message msg)
 {
-    QString filename;
+    fs::path filename;
 
     if (sftp_client_message_get_type(msg) == SFTP_FSETSTAT)
     {
@@ -974,70 +974,73 @@ int mp::SftpServer::handle_setstat(sftp_client_message msg)
         }
 
         const auto& [path, _] = *handle;
-        filename = path.string().c_str();
+        filename = path;
     }
     else
     {
         filename = sftp_client_message_get_filename(msg);
-        if (!validate_path(source_path, filename.toStdString()))
+        if (!validate_path(source_path, filename.u8string()))
         {
-            mpl::log(
-                mpl::Level::trace,
-                category,
-                fmt::format("{}: cannot validate path '{}' against source '{}'", __FUNCTION__, filename, source_path));
+            mpl::log(mpl::Level::trace,
+                     category,
+                     fmt::format("{}: cannot validate path '{}' against source '{}'",
+                                 __FUNCTION__,
+                                 filename.u8string(),
+                                 source_path));
             return reply_perm_denied(msg);
         }
 
-        QFileInfo file_info{filename};
+        QFileInfo file_info{QString::fromStdString(filename.u8string())};
         if (!file_info.isSymLink() && !MP_FILEOPS.exists(file_info))
         {
             mpl::log(mpl::Level::trace,
                      category,
-                     fmt::format("{}: cannot setstat '{}': no such file", __FUNCTION__, filename));
+                     fmt::format("{}: cannot setstat '{}': no such file", __FUNCTION__, filename.u8string()));
             return sftp_reply_status(msg, SSH_FX_NO_SUCH_FILE, "no such file");
         }
     }
 
-    QFile file{filename};
-    QFileInfo file_info{filename};
+    QFileInfo file_info{QString::fromStdString(filename.u8string())};
     if (!has_id_mappings_for(file_info))
     {
-        mpl::log(
-            mpl::Level::trace,
-            category,
-            fmt::format("{}: cannot access path \'{}\' without id mapping: permission denied", __FUNCTION__, filename));
+        mpl::log(mpl::Level::trace,
+                 category,
+                 fmt::format("{}: cannot access path \'{}\' without id mapping: permission denied",
+                             __FUNCTION__,
+                             filename.u8string()));
         return reply_perm_denied(msg);
     }
 
     if (msg->attr->flags & SSH_FILEXFER_ATTR_SIZE)
     {
+        QFile file{QString::fromStdString(filename.u8string())};
         if (!MP_FILEOPS.resize(file, msg->attr->size))
         {
-            mpl::log(mpl::Level::trace, category, fmt::format("{}: cannot resize '{}'", __FUNCTION__, filename));
+            mpl::log(mpl::Level::trace,
+                     category,
+                     fmt::format("{}: cannot resize '{}'", __FUNCTION__, filename.u8string()));
             return reply_failure(msg);
         }
     }
 
     if (msg->attr->flags & SSH_FILEXFER_ATTR_PERMISSIONS)
     {
-        std::error_code err;
-        MP_FILEOPS.permissions(file.fileName().toStdString(), static_cast<fs::perms>(msg->attr->permissions), err);
-        if (err)
+        if (!MP_PLATFORM.set_permissions(filename, static_cast<fs::perms>(msg->attr->permissions)))
         {
             mpl::log(mpl::Level::trace,
                      category,
-                     fmt::format("{}: set permissions failed for '{}': {}", __FUNCTION__, filename, err.message()));
+                     fmt::format("{}: set permissions failed for '{}'", __FUNCTION__, filename.u8string()));
             return reply_failure(msg);
         }
     }
 
     if (msg->attr->flags & SSH_FILEXFER_ATTR_ACMODTIME)
     {
-        if (MP_PLATFORM.utime(filename.toStdString().c_str(), msg->attr->atime, msg->attr->mtime) < 0)
+        if (MP_PLATFORM.utime(filename.u8string().c_str(), msg->attr->atime, msg->attr->mtime) < 0)
         {
             mpl::log(mpl::Level::trace,
                      category,
-                     fmt::format("{}: cannot set modification date for '{}'", __FUNCTION__, filename));
+                     fmt::format("{}: cannot set modification date for '{}'", __FUNCTION__, filename.u8string()));
             return reply_failure(msg);
         }
     }
@@ -1048,17 +1051,19 @@ int mp::SftpServer::handle_setstat(sftp_client_message msg)
         {
             mpl::log(mpl::Level::trace,
                      category,
-                     fmt::format("{}: cannot set ownership for \'{}\' without id mapping", __FUNCTION__, filename));
+                     fmt::format("{}: cannot set ownership for \'{}\' without id mapping",
+                                 __FUNCTION__,
+                                 filename.u8string()));
             return reply_perm_denied(msg);
         }
 
-        if (MP_PLATFORM.chown(filename.toStdString().c_str(),
+        if (MP_PLATFORM.chown(filename.u8string().c_str(),
                               reverse_uid_for(msg->attr->uid, msg->attr->uid),
                               reverse_gid_for(msg->attr->gid, msg->attr->gid)) < 0)
         {
             mpl::log(mpl::Level::trace,
                      category,
-                     fmt::format("{}: cannot set ownership for '{}'", __FUNCTION__, filename));
+                     fmt::format("{}: cannot set ownership for '{}'", __FUNCTION__, filename.u8string()));
             return reply_failure(msg);
         }
     }

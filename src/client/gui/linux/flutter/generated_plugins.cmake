@@ -3,11 +3,14 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  hotkey_manager
-  screen_retriever
+  file_selector_linux
+  hotkey_manager_linux
+  local_notifier
+  screen_retriever_linux
   tray_menu
   url_launcher_linux
   window_manager
+  window_size
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

@@ -32,6 +32,7 @@
 #include <src/platform/backends/lxd/lxd_virtual_machine_factory.h>
 
 #ifdef QEMU_ENABLED
+#include "tests/qemu/linux/mock_dnsmasq_server.h"
 #include <src/platform/backends/qemu/qemu_virtual_machine_factory.h>
 #define DEFAULT_FACTORY mp::QemuVirtualMachineFactory
 #define DEFAULT_DRIVER "qemu"
@@ -55,6 +56,7 @@
 #include <QString>
 
 #include <stdexcept>
+#include <tests/mock_platform.h>
 
 namespace mp = multipass;
 namespace mpt = multipass::test;
@@ -70,6 +72,11 @@ struct PlatformLinux : public mpt::TestWithMockedBinPath
     template <typename VMFactoryType>
     void aux_test_driver_factory(const QString& driver)
     {
+#ifdef QEMU_ENABLED
+        const mpt::MockDNSMasqServerFactory::GuardedMock dnsmasq_server_factory_attr{
+            mpt::MockDNSMasqServerFactory::inject<NiceMock>()};
+#endif
+
         auto factory = mpt::MockProcessFactory::Inject();
         setup_driver_settings(driver);
 
@@ -250,7 +257,7 @@ TEST_F(PlatformLinux, retrieves_empty_bridges)
 
     QDir fake_sys_class_net{tmp_dir.path()};
     QDir bridge_dir{fake_sys_class_net.filePath(fake_bridge)};
-    ASSERT_EQ(mpt::make_file_with_content(bridge_dir.filePath("type"), "1"), 1);
+    mpt::make_file_with_content(bridge_dir.filePath("type"), "1");
     ASSERT_TRUE(bridge_dir.mkpath("bridge"));
 
     auto net_map = mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path());
@@ -269,7 +276,7 @@ TEST_F(PlatformLinux, retrieves_ethernet_devices)
     const auto fake_eth = "someth";
 
     QDir fake_sys_class_net{tmp_dir.path()};
-    ASSERT_EQ(mpt::make_file_with_content(fake_sys_class_net.filePath(fake_eth) + "/type", "1"), 1);
+    mpt::make_file_with_content(fake_sys_class_net.filePath(fake_eth) + "/type", "1");
 
     auto net_map = mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path());
 
@@ -300,7 +307,7 @@ TEST_F(PlatformLinux, does_not_retrieve_other_virtual)
     const auto fake_virt = "somevirt";
 
     QDir fake_sys_class_net{tmp_dir.path() + "/virtual"};
-    ASSERT_EQ(mpt::make_file_with_content(fake_sys_class_net.filePath(fake_virt) + "/type", "1"), 1);
+    mpt::make_file_with_content(fake_sys_class_net.filePath(fake_virt) + "/type", "1");
 
     EXPECT_THAT(mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path()), IsEmpty());
 }
@@ -312,7 +319,7 @@ TEST_F(PlatformLinux, does_not_retrieve_wireless)
 
     QDir fake_sys_class_net{tmp_dir.path()};
     QDir wifi_dir{fake_sys_class_net.filePath(fake_wifi)};
-    ASSERT_EQ(mpt::make_file_with_content(wifi_dir.filePath("type"), "1"), 1);
+    mpt::make_file_with_content(wifi_dir.filePath("type"), "1");
     ASSERT_TRUE(wifi_dir.mkpath("wireless"));
 
     EXPECT_THAT(mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path()), IsEmpty());
@@ -324,7 +331,7 @@ TEST_F(PlatformLinux, does_not_retrieve_protocols)
     const auto fake_net = "somenet";
 
     QDir fake_sys_class_net{tmp_dir.path()};
-    ASSERT_EQ(mpt::make_file_with_content(fake_sys_class_net.filePath(fake_net) + "/type", "32"), 2);
+    mpt::make_file_with_content(fake_sys_class_net.filePath(fake_net) + "/type", "32");
 
     EXPECT_THAT(mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path()), IsEmpty());
 }
@@ -337,9 +344,8 @@ TEST_F(PlatformLinux, does_not_retrieve_other_specified_device_types)
 
     QDir fake_sys_class_net{tmp_dir.path()};
     QDir net_dir{fake_sys_class_net.filePath(fake_net)};
-    ASSERT_EQ(mpt::make_file_with_content(net_dir.filePath("type"), "1"), 1);
-    ASSERT_EQ(mpt::make_file_with_content(net_dir.filePath("uevent"), uevent_contents),
-              static_cast<int64_t>(uevent_contents.size()));
+    mpt::make_file_with_content(net_dir.filePath("type"), "1");
+    mpt::make_file_with_content(net_dir.filePath("uevent"), uevent_contents);
 
     auto net_map = mp::platform::detail::get_network_interfaces_from(fake_sys_class_net.path());
 
@@ -359,7 +365,7 @@ TEST_P(BridgeMemberTest, retrieves_bridges_with_members)
     QDir interface_dir{fake_sys_class_net.filePath(fake_bridge)};
     QDir members_dir{interface_dir.filePath("brif")};
 
-    ASSERT_EQ(mpt::make_file_with_content(interface_dir.filePath("type"), "1"), 1);
+    mpt::make_file_with_content(interface_dir.filePath("type"), "1");
     ASSERT_TRUE(interface_dir.mkpath("bridge"));
     ASSERT_TRUE(members_dir.mkpath("."));
 
@@ -374,7 +380,7 @@ TEST_P(BridgeMemberTest, retrieves_bridges_with_members)
 
         if (recognized)
         {
-            ASSERT_EQ(mpt::make_file_with_content(member_dir.filePath("type"), "1"), 1);
+            mpt::make_file_with_content(member_dir.filePath("type"), "1");
 
             substrs_matchers.push_back(HasSubstr(member));
             network_matchers.push_back(Field(&net_value_type::first, member));
@@ -622,13 +628,16 @@ TEST_F(PlatformLinux, create_alias_script_overwrites)
 {
     auto [mock_utils, guard1] = mpt::MockUtils::inject();
     auto [mock_file_ops, guard2] = mpt::MockFileOps::inject();
+    auto [mock_platform, guard3] = mpt::MockPlatform::inject();
 
     EXPECT_CALL(*mock_utils, make_file_with_content(_, _, true)).Times(1);
-    EXPECT_CALL(*mock_file_ops, permissions(_)).WillOnce(Return(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
-    EXPECT_CALL(*mock_file_ops, setPermissions(_, _)).WillOnce(Return(true));
+    EXPECT_CALL(*mock_file_ops, get_permissions(_))
+        .WillOnce(Return(mp::fs::perms::owner_read | mp::fs::perms::owner_write));
+    EXPECT_CALL(*mock_platform, set_permissions(_, _)).WillOnce(Return(true));
 
-    EXPECT_NO_THROW(
-        MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "other_command", "map"}));
+    // Calls the platform function directly since MP_PLATFORM is mocked.
+    EXPECT_NO_THROW(MP_PLATFORM.Platform::create_alias_script("alias_name",
+                                                              mp::AliasDefinition{"instance", "other_command", "map"}));
 }
 
 TEST_F(PlatformLinux, create_alias_script_throws_if_cannot_create_path)
@@ -659,14 +668,17 @@ TEST_F(PlatformLinux, create_alias_script_throws_if_cannot_set_permissions)
 {
     auto [mock_utils, guard1] = mpt::MockUtils::inject();
     auto [mock_file_ops, guard2] = mpt::MockFileOps::inject();
+    auto [mock_platform, guard3] = mpt::MockPlatform::inject();
 
     EXPECT_CALL(*mock_utils, make_file_with_content(_, _, true)).Times(1);
-    EXPECT_CALL(*mock_file_ops, permissions(_)).WillOnce(Return(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
-    EXPECT_CALL(*mock_file_ops, setPermissions(_, _)).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, get_permissions(_))
+        .WillOnce(Return(mp::fs::perms::owner_read | mp::fs::perms::owner_write));
+    EXPECT_CALL(*mock_platform, set_permissions(_, _)).WillOnce(Return(false));
 
     MP_EXPECT_THROW_THAT(
-        MP_PLATFORM.create_alias_script("alias_name", mp::AliasDefinition{"instance", "command", "map"}),
-        std::runtime_error, mpt::match_what(HasSubstr("cannot set permissions to alias script '")));
+        MP_PLATFORM.Platform::create_alias_script("alias_name", mp::AliasDefinition{"instance", "command", "map"}),
+        std::runtime_error,
+        mpt::match_what(HasSubstr("cannot set permissions to alias script '")));
 }
 
 TEST_F(PlatformLinux, remove_alias_script_works)

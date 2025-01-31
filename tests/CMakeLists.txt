@@ -68,6 +68,7 @@ add_executable(multipass_tests
   test_custom_image_host.cpp
   test_daemon.cpp
   test_daemon_authenticate.cpp
+  test_daemon_clone.cpp
   test_daemon_find.cpp
   test_daemon_launch.cpp
   test_daemon_mount.cpp
@@ -81,6 +82,7 @@ add_executable(multipass_tests
   test_global_settings_handlers.cpp
   test_id_mappings.cpp
   test_image_vault.cpp
+  test_image_vault_utils.cpp
   test_instance_settings_handler.cpp
   test_ip_address.cpp
   test_json_utils.cpp

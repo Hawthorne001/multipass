@@ -17,6 +17,7 @@
 #include <multipass/format.h>
 #include <multipass/platform.h>
 #include <multipass/platform_unix.h>
+#include <multipass/timer.h>
 #include <multipass/utils.h>
 
 #include <grp.h>
@@ -58,14 +59,20 @@ int mp::platform::Platform::chown(const char* path, unsigned int uid, unsigned i
     return ::lchown(path, uid, gid);
 }
 
-int mp::platform::Platform::chmod(const char* path, unsigned int mode) const
+bool mp::platform::Platform::set_permissions(const std::filesystem::path& path,
+                                             std::filesystem::perms permissions) const
 {
-    return ::chmod(path, mode);
-}
+    std::error_code ec{};
+    std::filesystem::permissions(path, permissions, ec);
 
-bool mp::platform::Platform::set_permissions(const mp::Path path, const QFileDevice::Permissions permissions) const
-{
-    return QFile::setPermissions(path, permissions);
+    if (ec)
+    {
+        mpl::log(mpl::Level::warning,
+                 "permissions",
+                 fmt::format("failed to set permissions for {}: {}", path.u8string(), ec.message()));
+    }
+
+    return !ec;
 }
 
 bool mp::platform::Platform::symlink(const char* target, const char* link, bool is_dir) const
@@ -99,6 +106,9 @@ std::string mp::platform::Platform::alias_path_message() const
 void mp::platform::Platform::set_server_socket_restrictions(const std::string& server_address,
                                                             const bool restricted) const
 {
+    // With C++20 change to using enum
+    using namespace std::filesystem;
+
     auto tokens = mp::utils::split(server_address, ":");
     if (tokens.size() != 2u)
         throw std::runtime_error(fmt::format("invalid server address specified: {}", server_address));
@@ -108,7 +118,7 @@ void mp::platform::Platform::set_server_socket_restrictions(const std::string& s
         return;
 
     int gid{0};
-    int mode{S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP};
+    auto mode{perms::owner_read | perms::owner_write | perms::group_read | perms::group_write};
 
     if (restricted)
     {
@@ -124,16 +134,15 @@ void mp::platform::Platform::set_server_socket_restrictions(const std::string& s
     }
     else
     {
-        mode |= S_IROTH | S_IWOTH;
+        mode |= perms::others_read | perms::others_write;
     }
 
     const auto socket_path = tokens[1];
     if (chown(socket_path.c_str(), 0, gid) == -1)
         throw std::runtime_error(fmt::format("Could not set ownership of the multipass socket: {}", strerror(errno)));
 
-    if (chmod(socket_path.c_str(), mode) == -1)
-        throw std::runtime_error(
-            fmt::format("Could not set permissions for the multipass socket: {}", strerror(errno)));
+    if (!set_permissions(socket_path, mode))
+        throw std::runtime_error(fmt::format("Could not set permissions for the multipass socket"));
 }
 
 QString mp::platform::Platform::multipass_storage_location() const
@@ -157,6 +166,25 @@ int mp::platform::symlink_attr_from(const char* path, sftp_attributes_struct* at
     return 0;
 }
 
+mp::platform::PosixSignal::PosixSignal(const PrivatePass& pass) noexcept : Singleton(pass)
+{
+}
+
+int mp::platform::PosixSignal::pthread_sigmask(int how, const sigset_t* sigset, sigset_t* old_set) const
+{
+    return ::pthread_sigmask(how, sigset, old_set);
+}
+
+int mp::platform::PosixSignal::pthread_kill(pthread_t target, int signal) const
+{
+    return ::pthread_kill(target, signal);
+}
+
+int mp::platform::PosixSignal::sigwait(const sigset_t& sigset, int& got) const
+{
+    return ::sigwait(std::addressof(sigset), std::addressof(got));
+}
+
 sigset_t mp::platform::make_sigset(const std::vector<int>& sigs)
 {
     sigset_t sigset;
@@ -171,15 +199,42 @@ sigset_t mp::platform::make_sigset(const std::vector<int>& sigs)
 sigset_t mp::platform::make_and_block_signals(const std::vector<int>& sigs)
 {
     auto sigset{make_sigset(sigs)};
-    pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
+    MP_POSIX_SIGNAL.pthread_sigmask(SIG_BLOCK, &sigset, nullptr);
     return sigset;
 }
 
-std::function<int()> mp::platform::make_quit_watchdog()
+std::function<std::optional<int>(const std::function<bool()>&)> mp::platform::make_quit_watchdog(
+    const std::chrono::milliseconds& period)
 {
-    return [sigset = make_and_block_signals({SIGQUIT, SIGTERM, SIGHUP})]() {
-        int sig = -1;
-        sigwait(&sigset, &sig);
-        return sig;
+    return [sigset = make_and_block_signals({SIGQUIT, SIGTERM, SIGHUP, SIGUSR2}),
+            period](const std::function<bool()>& condition) -> std::optional<int> {
+        // create a timer to periodically send SIGUSR2
+        utils::Timer signal_generator{period,
+                                      [signalee = pthread_self()] { MP_POSIX_SIGNAL.pthread_kill(signalee, SIGUSR2); }};
+
+        // wait on signals and condition
+        int latest_signal = SIGUSR2;
+        while (latest_signal == SIGUSR2 && condition())
+        {
+            signal_generator.start();
+
+            // can't use sigtimedwait since macOS doesn't support it
+            MP_POSIX_SIGNAL.sigwait(sigset, latest_signal);
+        }
+
+        signal_generator.stop();
+
+        // if `latest_signal` is SIGUSR2 then we know `condition()` is false
+        return latest_signal == SIGUSR2 ? std::nullopt : std::make_optional(latest_signal);
     };
+}
+
+int mp::platform::Platform::get_cpus() const
+{
+    return sysconf(_SC_NPROCESSORS_ONLN);
+}
+
+long long mp::platform::Platform::get_total_ram() const
+{
+    return static_cast<long long>(sysconf(_SC_PHYS_PAGES)) * sysconf(_SC_PAGESIZE);
 }

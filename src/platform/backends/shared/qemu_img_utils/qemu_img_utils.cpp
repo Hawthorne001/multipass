@@ -96,9 +96,21 @@ void mp::backend::amend_to_qcow2_v3(const mp::Path& image_path)
 
 bool mp::backend::instance_image_has_snapshot(const mp::Path& image_path, QString snapshot_tag)
 {
-    auto process = checked_exec_qemu_img(
-        std::make_unique<mp::QemuImgProcessSpec>(QStringList{"snapshot", "-l", image_path}, image_path));
-
     QRegularExpression regex{snapshot_tag.append(R"(\s)")};
-    return QString{process->read_all_standard_output()}.contains(regex);
+    return QString{snapshot_list_output(image_path)}.contains(regex);
+}
+
+QByteArray mp::backend::snapshot_list_output(const Path& image_path)
+{
+    auto qemuimg_info_process = checked_exec_qemu_img(
+        std::make_unique<mp::QemuImgProcessSpec>(QStringList{"snapshot", "-l", image_path}, image_path),
+        "Cannot list snapshots from the image");
+    return qemuimg_info_process->read_all_standard_output();
+}
+
+void mp::backend::delete_snapshot_from_image(const Path& image_path, const QString& snapshot_tag)
+{
+    checked_exec_qemu_img(
+        std::make_unique<mp::QemuImgProcessSpec>(QStringList{"snapshot", "-d", snapshot_tag, image_path}, image_path),
+        "Cannot delete snapshot from the image");
 }

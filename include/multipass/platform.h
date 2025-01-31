@@ -58,8 +58,7 @@ public:
     virtual bool is_remote_supported(const std::string& remote) const;
     virtual bool is_backend_supported(const QString& backend) const; // temporary (?)
     virtual int chown(const char* path, unsigned int uid, unsigned int gid) const;
-    virtual int chmod(const char* path, unsigned int mode) const;
-    virtual bool set_permissions(const multipass::Path path, const QFileDevice::Permissions permissions) const;
+    virtual bool set_permissions(const std::filesystem::path& path, std::filesystem::perms permissions) const;
     virtual bool link(const char* target, const char* link) const;
     virtual bool symlink(const char* target, const char* link, bool is_dir) const;
     virtual int utime(const char* path, int atime, int mtime) const;
@@ -76,6 +75,9 @@ public:
     virtual QString default_driver() const;
     virtual QString default_privileged_mounts() const;
     virtual bool is_image_url_supported() const;
+    [[nodiscard]] virtual std::string bridge_nomenclature() const;
+    virtual int get_cpus() const;
+    virtual long long get_total_ram() const;
 };
 
 QString interpret_setting(const QString& key, const QString& val);
@@ -90,7 +92,12 @@ std::unique_ptr<Process> make_sshfs_server_process(const SSHFSServerConfig& conf
 std::unique_ptr<Process> make_process(std::unique_ptr<ProcessSpec>&& process_spec);
 int symlink_attr_from(const char* path, sftp_attributes_struct* attr);
 
-std::function<int()> make_quit_watchdog(); // call while single-threaded; call result later, in dedicated thread
+// Creates a function that will wait for signals or until the passed function returns false.
+// The passed function is checked every `period` milliseconds.
+// If a signal is received the optional contains it, otherwise the optional is empty.
+// `make_quit_watchdog` should only be called once.
+std::function<std::optional<int>(const std::function<bool()>&)> make_quit_watchdog(
+    const std::chrono::milliseconds& period); // call while single-threaded; call result later, in dedicated thread
 
 std::string reinterpret_interface_id(const std::string& ux_id); // give platforms a chance to reinterpret network IDs
 

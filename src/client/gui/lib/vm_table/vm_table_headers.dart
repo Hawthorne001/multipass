@@ -1,14 +1,17 @@
+import 'package:basics/basics.dart';
 import 'package:built_collection/built_collection.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Tooltip;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../extensions.dart';
 import '../providers.dart';
 import '../sidebar.dart';
+import '../tooltip.dart';
 import '../vm_details/cpu_sparkline.dart';
 import '../vm_details/ip_addresses.dart';
 import '../vm_details/memory_usage.dart';
 import '../vm_details/vm_status_icon.dart';
+import 'search_box.dart';
 import 'table.dart';
 import 'vms.dart';
 
@@ -32,7 +35,12 @@ final headers = <TableHeader<VmInfo>>[
     width: 110,
     minWidth: 70,
     sortKey: (info) => info.instanceStatus.status.name,
-    cellBuilder: (info) => VmStatusIcon(info.instanceStatus.status),
+    cellBuilder: (info) => Consumer(
+      builder: (_, ref, __) => VmStatusIcon(
+        info.instanceStatus.status,
+        isLaunching: ref.watch(isLaunchingProvider(info.name)),
+      ),
+    ),
   ),
   TableHeader(
     name: 'CPU USAGE',
@@ -59,6 +67,18 @@ final headers = <TableHeader<VmInfo>>[
     ),
   ),
   TableHeader(
+    name: 'IMAGE',
+    width: 140,
+    minWidth: 70,
+    cellBuilder: (info) {
+      final image = info.instanceInfo.currentRelease;
+      return Text(
+        image.isNotBlank ? image.nonBreaking : '-',
+        overflow: TextOverflow.ellipsis,
+      );
+    },
+  ),
+  TableHeader(
     name: 'PRIVATE IP',
     width: 140,
     minWidth: 100,
@@ -78,7 +98,14 @@ class SelectAllCheckbox extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final selectedVms = ref.watch(selectedVmsProvider);
-    final vmNames = ref.watch(vmNamesProvider);
+    final searchName = ref.watch(searchNameProvider);
+    final runningOnly = ref.watch(runningOnlyProvider);
+    final vmNames = ref
+        .watch(vmInfosProvider)
+        .where((i) => !runningOnly || i.instanceStatus.status == Status.RUNNING)
+        .where((i) => i.name.contains(searchName))
+        .map((i) => i.name)
+        .toList();
     final allSelected = selectedVms.containsAll(vmNames);
 
     void toggleSelectedAll(bool isSelected) {
@@ -131,7 +158,7 @@ class VmNameLink extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    goToVm() => ref.read(sidebarKeyProvider.notifier).state = 'vm-$name';
+    goToVm() => ref.read(sidebarKeyProvider.notifier).set('vm-$name');
 
     return Tooltip(
       message: name,

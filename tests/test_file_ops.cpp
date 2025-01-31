@@ -64,6 +64,16 @@ TEST_F(FileOps, exists)
     EXPECT_FALSE(err);
 }
 
+TEST_F(FileOps, copy)
+{
+    const fs::path src_dir = temp_dir / "sub_src_dir";
+    const fs::path dest_dir = temp_dir / "sub_dest_dir";
+    MP_FILEOPS.create_directory(src_dir, err);
+
+    EXPECT_NO_THROW(MP_FILEOPS.copy(src_dir, dest_dir, std::filesystem::copy_options::recursive));
+    EXPECT_TRUE(MP_FILEOPS.exists(dest_dir, err));
+}
+
 TEST_F(FileOps, is_directory)
 {
     EXPECT_TRUE(MP_FILEOPS.is_directory(temp_dir, err));
@@ -96,14 +106,6 @@ TEST_F(FileOps, symlink)
     EXPECT_TRUE(err);
     EXPECT_EQ(MP_FILEOPS.read_symlink(temp_dir / "symlink", err), temp_file);
     EXPECT_FALSE(err);
-}
-
-TEST_F(FileOps, permissions)
-{
-    MP_FILEOPS.permissions(temp_file, fs::perms::all, err);
-    EXPECT_FALSE(err);
-    MP_FILEOPS.permissions(temp_dir / "nonexistent", fs::perms::all, err);
-    EXPECT_TRUE(err);
 }
 
 TEST_F(FileOps, status)
@@ -181,4 +183,18 @@ TEST_F(FileOps, posix_lseek)
     const auto r = MP_FILEOPS.read(named_fd->fd, buffer.data(), buffer.size());
     EXPECT_EQ(r, file_content.size() - seek);
     EXPECT_STREQ(buffer.data(), file_content.c_str() + seek);
+}
+
+TEST_F(FileOps, remove_extension)
+{
+    EXPECT_EQ(MP_FILEOPS.remove_extension(""), "");
+    EXPECT_EQ(MP_FILEOPS.remove_extension("test"), "test");
+    EXPECT_EQ(MP_FILEOPS.remove_extension(".empty"), ".empty");
+    EXPECT_EQ(MP_FILEOPS.remove_extension("tests/.empty"), "tests/.empty");
+
+    EXPECT_EQ(MP_FILEOPS.remove_extension("test.txt"), "test");
+    EXPECT_EQ(MP_FILEOPS.remove_extension("tests/.empty.txt"), "tests/.empty");
+    EXPECT_EQ(MP_FILEOPS.remove_extension("tests/test.test.txt"), "tests/test.test");
+    EXPECT_EQ(MP_FILEOPS.remove_extension("tests/bar.foo.tar.gz"), "tests/bar.foo.tar");
+    EXPECT_EQ(MP_FILEOPS.remove_extension("/sets/test.png"), "/sets/test");
 }

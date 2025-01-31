@@ -40,7 +40,7 @@ public:
     MOCK_METHOD(bool, is_remote_supported, (const std::string&), (const, override));
     MOCK_METHOD(bool, is_backend_supported, (const QString&), (const, override));
     MOCK_METHOD(bool, is_alias_supported, (const std::string&, const std::string&), (const, override));
-    MOCK_METHOD(int, chmod, (const char*, unsigned int), (const, override));
+    MOCK_METHOD(bool, set_permissions, (const std::filesystem::path&, std::filesystem::perms), (const, override));
     MOCK_METHOD(int, chown, (const char*, unsigned int, unsigned int), (const, override));
     MOCK_METHOD(bool, link, (const char*, const char*), (const, override));
     MOCK_METHOD(bool, symlink, (const char*, const char*, bool), (const, override));
@@ -56,6 +56,7 @@ public:
     MOCK_METHOD(QString, default_privileged_mounts, (), (const, override));
     MOCK_METHOD(bool, is_image_url_supported, (), (const, override));
     MOCK_METHOD(QString, get_username, (), (const, override));
+    MOCK_METHOD(std::string, bridge_nomenclature, (), (const, override));
 
     MP_MOCK_SINGLETON_BOILERPLATE(MockPlatform, Platform);
 };

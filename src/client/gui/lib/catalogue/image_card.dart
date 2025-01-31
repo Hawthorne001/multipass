@@ -4,7 +4,6 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../providers.dart';
 import 'launch_form.dart';
-import 'launch_panel.dart';
 
 class ImageCard extends ConsumerWidget {
   final ImageInfo image;
@@ -56,42 +55,40 @@ class ImageCard extends ConsumerWidget {
                 child: Text(image.codename),
               ),
             ),
-            Row(
-              children: [
-                OutlinedButton(
-                  onPressed: () {
-                    final grpcClient = ref.read(grpcClientProvider);
-                    final name = ref.read(randomNameProvider);
-                    final request = LaunchRequest(instanceName: name);
-                    final aliasInfo = image.aliasesInfo.first;
-                    request.image = aliasInfo.alias;
-                    if (aliasInfo.hasRemoteName()) {
-                      request.remoteName = aliasInfo.remoteName;
-                    }
+            Row(children: [
+              OutlinedButton(
+                onPressed: () {
+                  final name = ref.read(randomNameProvider);
+                  final aliasInfo = image.aliasesInfo.first;
+                  final launchRequest = LaunchRequest(
+                    instanceName: name,
+                    image: aliasInfo.alias,
+                    numCores: defaultCpus,
+                    memSize: '${defaultRam}B',
+                    diskSpace: '${defaultDisk}B',
+                    remoteName:
+                        aliasInfo.hasRemoteName() ? aliasInfo.remoteName : null,
+                  );
 
-                    final stream = grpcClient.launch(request);
-                    ref.read(launchOperationProvider.notifier).state =
-                        (stream, name, imageName(image));
-                    Scaffold.of(context).openEndDrawer();
-                  },
-                  child: const Text('Launch'),
-                ),
-                const SizedBox(width: 16),
-                OutlinedButton(
-                  onPressed: () {
-                    ref.read(launchingImageProvider.notifier).state = image;
-                    Scaffold.of(context).openEndDrawer();
-                  },
-                  child: SvgPicture.asset(
-                    'assets/settings.svg',
-                    colorFilter: const ColorFilter.mode(
-                      Colors.black,
-                      BlendMode.srcIn,
-                    ),
+                  initiateLaunchFlow(ref, launchRequest);
+                },
+                child: const Text('Launch'),
+              ),
+              const SizedBox(width: 16),
+              OutlinedButton(
+                onPressed: () {
+                  ref.read(launchingImageProvider.notifier).state = image;
+                  Scaffold.of(context).openEndDrawer();
+                },
+                child: SvgPicture.asset(
+                  'assets/settings.svg',
+                  colorFilter: const ColorFilter.mode(
+                    Colors.black,
+                    BlendMode.srcIn,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ]),
           ],
         ),
       ),

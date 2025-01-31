@@ -47,7 +47,7 @@ struct StubVirtualMachine final : public multipass::VirtualMachine
     {
     }
 
-    void shutdown() override
+    void shutdown(ShutdownPolicy shutdown_policy = ShutdownPolicy::Powerdown) override
     {
     }
 
@@ -90,7 +90,7 @@ struct StubVirtualMachine final : public multipass::VirtualMachine
         return {};
     }
 
-    std::string ssh_exec(const std::string& cmd) override
+    std::string ssh_exec(const std::string& cmd, bool whisper = false) override
     {
         return {};
     }

@@ -32,14 +32,13 @@ namespace multipass
 class XzImageDecoder
 {
 public:
-    XzImageDecoder(const Path& xz_file_path);
+    XzImageDecoder();
 
-    void decode_to(const Path& decoded_file_path, const ProgressMonitor& monitor);
+    void decode_to(const Path& xz_file_path, const Path& decoded_file_path, const ProgressMonitor& monitor) const;
 
     using XzDecoderUPtr = std::unique_ptr<xz_dec, decltype(xz_dec_end)*>;
 
 private:
-    QFile xz_file;
     XzDecoderUPtr xz_decoder;
 };
 } // namespace multipass

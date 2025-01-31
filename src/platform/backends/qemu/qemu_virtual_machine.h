@@ -46,11 +46,12 @@ public:
                        QemuPlatform* qemu_platform,
                        VMStatusMonitor& monitor,
                        const SSHKeyProvider& key_provider,
-                       const Path& instance_dir);
+                       const Path& instance_dir,
+                       bool remove_snapshots = false);
     ~QemuVirtualMachine();
 
     void start() override;
-    void shutdown() override;
+    void shutdown(ShutdownPolicy shutdown_policy = ShutdownPolicy::Powerdown) override;
     void suspend() override;
     State current_state() override;
     int ssh_port() override;
@@ -69,7 +70,6 @@ public:
                                        const NetworkInterface& extra_interface) override;
     virtual MountArgs& modifiable_mount_args();
     std::unique_ptr<MountHandler> make_native_mount_handler(const std::string& target, const VMMount& mount) override;
-
 signals:
     void on_delete_memory_snapshot();
     void on_reset_network();
@@ -98,16 +98,21 @@ private:
     void on_restart();
     void initialize_vm_process();
 
+    void connect_vm_signals();
+    void disconnect_vm_signals();
+    void remove_snapshots_from_backend() const;
+
     VirtualMachineDescription desc;
     std::unique_ptr<Process> vm_process{nullptr};
-    const std::string mac_addr;
-    const std::string username;
     QemuPlatform* qemu_platform;
     VMStatusMonitor* monitor;
     MountArgs mount_args;
     std::string saved_error_msg;
     bool update_shutdown_status{true};
     bool is_starting_from_suspend{false};
+    bool force_shutdown{false};
+    std::mutex vm_signal_mutex;
+    bool vm_signals_connected{false};
     std::chrono::steady_clock::time_point network_deadline;
 };
 } // namespace multipass

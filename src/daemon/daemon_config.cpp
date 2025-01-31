@@ -64,7 +64,7 @@ std::unique_ptr<QNetworkProxy> discover_http_proxy()
     QString http_proxy{qgetenv("http_proxy")};
     if (http_proxy.isEmpty())
     {
-        // Some OS's are case senstive
+        // Some OS's are case sensitive
         http_proxy = qgetenv("HTTP_PROXY");
     }
 
@@ -110,7 +110,7 @@ std::unique_ptr<const mp::DaemonConfig> mp::DaemonConfigBuilder::build()
 
     auto storage_path = MP_PLATFORM.multipass_storage_location();
     if (!storage_path.isEmpty())
-        MP_UTILS.make_dir(storage_path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+        MP_UTILS.make_dir(storage_path, std::filesystem::perms::owner_all);
 
     if (cache_directory.isEmpty())
     {
