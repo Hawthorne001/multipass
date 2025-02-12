@@ -18,6 +18,7 @@
 #include "common.h"
 #include "mock_file_ops.h"
 #include "mock_logger.h"
+#include "mock_platform.h"
 #include "mock_recursive_dir_iterator.h"
 #include "mock_sftp.h"
 #include "mock_sftp_dir_iterator.h"
@@ -76,15 +77,26 @@ struct SFTPClient : public testing::Test
         return {std::make_unique<mp::SSHSession>("b", 43, "ubuntu", key_provider)};
     }
 
+// this is a macro since REPLACE only applies to the current scope and cannot be moved out.
+#define REPLACE_SFTP_INIT()                                                                                            \
+    REPLACE(sftp_init, [this](sftp_session sftp) {                                                                     \
+        sftp->limits = &limits;                                                                                        \
+        return SSH_OK;                                                                                                 \
+    });
+
     decltype(MOCK(sftp_close)) close{MOCK(sftp_close)};
     MockScope<decltype(mock_sftp_new)> sftp_new;
     MockScope<decltype(mock_sftp_free)> free_sftp;
+
+    sftp_limits_struct limits{32768, 32768, 32768, 0};
 
     const mpt::StubSSHKeyProvider key_provider;
     mpt::MockSSHTestFixture mock_ssh_test_fixture;
 
     mpt::MockFileOps::GuardedMock mock_file_ops_guard{mpt::MockFileOps::inject()};
     mpt::MockFileOps* mock_file_ops{mock_file_ops_guard.first};
+    const mpt::MockPlatform::GuardedMock mock_platform_guard{mpt::MockPlatform::inject()};
+    const mpt::MockPlatform& mock_platform{*mock_platform_guard.first};
     mpt::MockSFTPUtils::GuardedMock mock_sftp_utils_guard{mpt::MockSFTPUtils::inject()};
     mpt::MockSFTPUtils* mock_sftp_utils{mock_sftp_utils_guard.first};
     mpt::MockLogger::Scope mock_logger_scope{mpt::MockLogger::inject()};
@@ -112,7 +124,7 @@ TEST_F(SFTPClient, throws_when_failed_to_init)
 
 TEST_F(SFTPClient, is_dir)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
 
     auto mocked_sftp_stat = MOCK(sftp_stat);
     auto sftp_client = make_sftp_client();
@@ -129,7 +141,7 @@ TEST_F(SFTPClient, push_file_success)
 {
     std::string test_data = "test_data";
 
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(false));
     EXPECT_CALL(*mock_sftp_utils, get_remote_file_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
     EXPECT_CALL(*mock_file_ops, open_read(source_path, _))
@@ -156,7 +168,7 @@ TEST_F(SFTPClient, push_file_success)
 
 TEST_F(SFTPClient, push_file_cannot_open_source)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(false));
     EXPECT_CALL(*mock_sftp_utils, get_remote_file_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
     auto err = EACCES;
@@ -176,7 +188,7 @@ TEST_F(SFTPClient, push_file_cannot_open_source)
 
 TEST_F(SFTPClient, push_file_cannot_open_target)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(false));
     EXPECT_CALL(*mock_sftp_utils, get_remote_file_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
     EXPECT_CALL(*mock_file_ops, open_read(source_path, _)).WillOnce(Return(std::make_unique<std::stringstream>()));
@@ -194,7 +206,7 @@ TEST_F(SFTPClient, push_file_cannot_write_target)
 {
     std::string test_data = "test_data";
 
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(false));
     EXPECT_CALL(*mock_sftp_utils, get_remote_file_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
     EXPECT_CALL(*mock_file_ops, open_read(source_path, _))
@@ -215,7 +227,7 @@ TEST_F(SFTPClient, push_file_cannot_read_source)
 {
     std::string test_data = "test_data";
 
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(false));
     EXPECT_CALL(*mock_sftp_utils, get_remote_file_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -245,7 +257,7 @@ TEST_F(SFTPClient, push_file_cannot_set_perms)
 {
     std::string test_data = "test_data";
 
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(false));
     EXPECT_CALL(*mock_sftp_utils, get_remote_file_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
     EXPECT_CALL(*mock_file_ops, open_read(source_path, _))
@@ -271,7 +283,7 @@ TEST_F(SFTPClient, pull_file_success)
 {
     std::string test_data = "test_data";
 
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_sftp_utils, get_local_file_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
     std::stringstream test_file;
@@ -288,20 +300,23 @@ TEST_F(SFTPClient, pull_file_success)
 
     mode_t perms = 0777;
     REPLACE(sftp_stat, [&](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_REGULAR, "", perms); });
-    fs::perms written_perms;
-    EXPECT_CALL(*mock_file_ops, permissions(target_path, static_cast<fs::perms>(perms), _))
-        .WillOnce([&](auto, auto perms, auto) { written_perms = perms; });
+    std::filesystem::perms written_perms;
+    EXPECT_CALL(mock_platform, set_permissions(target_path, static_cast<std::filesystem::perms>(perms)))
+        .WillOnce([&](auto, auto perms) {
+            written_perms = perms;
+            return true;
+        });
 
     auto sftp_client = make_sftp_client();
 
     EXPECT_TRUE(sftp_client.pull(source_path, target_path));
     EXPECT_EQ(test_data, test_file.str());
-    EXPECT_EQ(static_cast<fs::perms>(perms), written_perms);
+    EXPECT_EQ(static_cast<std::filesystem::perms>(perms), written_perms);
 }
 
 TEST_F(SFTPClient, pull_file_cannot_open_source)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(); });
     EXPECT_CALL(*mock_sftp_utils, get_local_file_target(source_path, target_path, _)).WillOnce(Return(target_path));
     EXPECT_CALL(*mock_file_ops, open_write(target_path, _)).WillOnce(Return(std::make_unique<std::stringstream>()));
@@ -317,7 +332,7 @@ TEST_F(SFTPClient, pull_file_cannot_open_source)
 
 TEST_F(SFTPClient, pull_file_cannot_open_target)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(); });
     EXPECT_CALL(*mock_sftp_utils, get_local_file_target(source_path, target_path, _)).WillOnce(Return(target_path));
     auto err = EACCES;
@@ -337,7 +352,7 @@ TEST_F(SFTPClient, pull_file_cannot_open_target)
 
 TEST_F(SFTPClient, pull_file_cannot_write_target)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_sftp_utils, get_local_file_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
     auto test_file = std::make_unique<std::stringstream>();
@@ -354,7 +369,7 @@ TEST_F(SFTPClient, pull_file_cannot_write_target)
     };
     REPLACE(sftp_read, mocked_sftp_read);
     REPLACE(sftp_stat, [&](auto...) { return get_dummy_sftp_attr(); });
-    EXPECT_CALL(*mock_file_ops, permissions(target_path, _, _));
+    EXPECT_CALL(mock_platform, set_permissions(target_path, _)).WillOnce(Return(true));
     REPLACE(sftp_setstat, [](auto...) { return SSH_FX_OK; });
 
     auto sftp_client = make_sftp_client();
@@ -366,7 +381,7 @@ TEST_F(SFTPClient, pull_file_cannot_write_target)
 
 TEST_F(SFTPClient, pull_file_cannot_read_source)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(); });
     EXPECT_CALL(*mock_sftp_utils, get_local_file_target(source_path, target_path, _)).WillOnce(Return(target_path));
     EXPECT_CALL(*mock_file_ops, open_write(target_path, _)).WillOnce(Return(std::make_unique<std::stringstream>()));
@@ -384,7 +399,7 @@ TEST_F(SFTPClient, pull_file_cannot_read_source)
 
 TEST_F(SFTPClient, pull_file_cannot_set_perms)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_sftp_utils, get_local_file_target(source_path, target_path, _)).WillOnce(Return(target_path));
     EXPECT_CALL(*mock_file_ops, open_write(target_path, _)).WillOnce(Return(std::make_unique<std::stringstream>()));
     REPLACE(sftp_open, [](auto sftp, auto...) { return get_dummy_sftp_file(sftp); });
@@ -392,20 +407,19 @@ TEST_F(SFTPClient, pull_file_cannot_set_perms)
 
     mode_t perms = 0777;
     REPLACE(sftp_stat, [&](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_REGULAR, "", perms); });
-    auto err = std::make_error_code(std::errc::permission_denied);
-    EXPECT_CALL(*mock_file_ops, permissions(target_path, static_cast<fs::perms>(perms), _))
-        .WillOnce([&](auto, auto, std::error_code& e) { e = err; });
+
+    EXPECT_CALL(mock_platform, set_permissions(target_path, static_cast<std::filesystem::perms>(perms)))
+        .WillOnce(Return(false));
 
     auto sftp_client = make_sftp_client();
 
-    mock_logger->expect_log(mpl::Level::error,
-                            fmt::format("cannot set permissions for local file {}: {}", target_path, err.message()));
+    mock_logger->expect_log(mpl::Level::error, fmt::format("cannot set permissions for local file {}", target_path));
     EXPECT_FALSE(sftp_client.pull(source_path, target_path));
 }
 
 TEST_F(SFTPClient, push_dir_success_regular)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_sftp_utils, get_remote_dir_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -444,7 +458,7 @@ TEST_F(SFTPClient, push_dir_success_regular)
 
 TEST_F(SFTPClient, push_dir_success_dir)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_sftp_utils, get_remote_dir_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -475,7 +489,7 @@ TEST_F(SFTPClient, push_dir_success_dir)
 
 TEST_F(SFTPClient, push_dir_fail_dir)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_sftp_utils, get_remote_dir_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -508,7 +522,7 @@ TEST_F(SFTPClient, push_dir_fail_dir)
 
 TEST_F(SFTPClient, push_dir_success_symlink)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_sftp_utils, get_remote_dir_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -538,7 +552,7 @@ TEST_F(SFTPClient, push_dir_success_symlink)
 
 TEST_F(SFTPClient, push_dir_cannot_read_symlink)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_sftp_utils, get_remote_dir_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -571,7 +585,7 @@ TEST_F(SFTPClient, push_dir_cannot_read_symlink)
 
 TEST_F(SFTPClient, push_dir_cannot_create_symlink)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_sftp_utils, get_remote_dir_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -605,7 +619,7 @@ TEST_F(SFTPClient, push_dir_cannot_create_symlink)
 
 TEST_F(SFTPClient, push_dir_symlink_over_dir)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_sftp_utils, get_remote_dir_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -636,7 +650,7 @@ TEST_F(SFTPClient, push_dir_symlink_over_dir)
 
 TEST_F(SFTPClient, push_dir_unknown_file_type)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_sftp_utils, get_remote_dir_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -663,7 +677,7 @@ TEST_F(SFTPClient, push_dir_unknown_file_type)
 
 TEST_F(SFTPClient, push_dir_open_iter_fail)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_sftp_utils, get_remote_dir_target(_, source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -682,7 +696,7 @@ TEST_F(SFTPClient, push_dir_open_iter_fail)
 
 TEST_F(SFTPClient, push_dir_cannot_access_target)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
 
     auto err = std::make_error_code(std::errc::permission_denied);
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce([&](auto, std::error_code& e) {
@@ -698,7 +712,7 @@ TEST_F(SFTPClient, push_dir_cannot_access_target)
 
 TEST_F(SFTPClient, push_dir_r_not_specified)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_file_ops, is_directory(source_path, _)).WillOnce(Return(true));
 
     auto sftp_client = make_sftp_client();
@@ -710,7 +724,7 @@ TEST_F(SFTPClient, push_dir_r_not_specified)
 
 TEST_F(SFTPClient, pull_dir_success_regular)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     EXPECT_CALL(*mock_sftp_utils, get_local_dir_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
     auto iter = std::make_unique<mpt::MockSFTPDirIterator>();
@@ -739,24 +753,30 @@ TEST_F(SFTPClient, pull_dir_success_regular)
         return source_path == path ? get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY, "", perms)
                                    : get_dummy_sftp_attr(SSH_FILEXFER_TYPE_REGULAR, "", perms);
     });
-    fs::perms file_written_perms;
-    fs::perms dir_written_perms;
-    EXPECT_CALL(*mock_file_ops, permissions(target_path / "file", static_cast<fs::perms>(perms), _))
-        .WillOnce([&](auto, auto perms, auto) { file_written_perms = perms; });
-    EXPECT_CALL(*mock_file_ops, permissions(target_path, static_cast<fs::perms>(perms), _))
-        .WillOnce([&](auto, auto perms, auto) { dir_written_perms = perms; });
+    std::filesystem::perms file_written_perms;
+    std::filesystem::perms dir_written_perms;
+    EXPECT_CALL(mock_platform, set_permissions(target_path / "file", static_cast<std::filesystem::perms>(perms)))
+        .WillOnce([&](auto, auto perms) {
+            file_written_perms = perms;
+            return true;
+        });
+    EXPECT_CALL(mock_platform, set_permissions(target_path, static_cast<std::filesystem::perms>(perms)))
+        .WillOnce([&](auto, auto perms) {
+            dir_written_perms = perms;
+            return true;
+        });
 
     auto sftp_client = make_sftp_client();
 
     EXPECT_TRUE(sftp_client.pull(source_path, target_path, mp::SFTPClient::Flag::Recursive));
     EXPECT_EQ(test_data, test_file.str());
-    EXPECT_EQ(static_cast<fs::perms>(perms), file_written_perms);
-    EXPECT_EQ(static_cast<fs::perms>(perms), dir_written_perms);
+    EXPECT_EQ(static_cast<std::filesystem::perms>(perms), file_written_perms);
+    EXPECT_EQ(static_cast<std::filesystem::perms>(perms), dir_written_perms);
 }
 
 TEST_F(SFTPClient, pull_dir_success_dir)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY); });
     EXPECT_CALL(*mock_sftp_utils, get_local_dir_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -768,7 +788,7 @@ TEST_F(SFTPClient, pull_dir_success_dir)
         .WillOnce(Return(std::unique_ptr<sftp_attributes_struct>(
             get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY, "source/path/dir"))));
     EXPECT_CALL(*mock_file_ops, create_directory(target_path / "dir", _));
-    EXPECT_CALL(*mock_file_ops, permissions(_, _, _)).Times(2);
+    EXPECT_CALL(mock_platform, set_permissions(_, _)).Times(2).WillRepeatedly(Return(true));
 
     auto sftp_client = make_sftp_client();
 
@@ -777,7 +797,7 @@ TEST_F(SFTPClient, pull_dir_success_dir)
 
 TEST_F(SFTPClient, pull_dir_fail_dir)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY); });
     EXPECT_CALL(*mock_sftp_utils, get_local_dir_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -794,20 +814,20 @@ TEST_F(SFTPClient, pull_dir_fail_dir)
         e = err;
         return false;
     });
-    EXPECT_CALL(*mock_file_ops, permissions(_, _, _));
+    EXPECT_CALL(mock_platform, set_permissions(_, _)).WillOnce(Return(false));
 
     auto sftp_client = make_sftp_client();
 
     mock_logger->expect_log(mpl::Level::error,
                             fmt::format("cannot create local directory {}: {}", target_path / "dir", err.message()));
-    mock_logger->expect_log(mpl::Level::error, fmt::format("cannot set permissions for local directory {}: {}",
-                                                           target_path, err.message()));
+    mock_logger->expect_log(mpl::Level::error,
+                            fmt::format("cannot set permissions for local directory {}", target_path));
     EXPECT_FALSE(sftp_client.pull(source_path, target_path, mp::SFTPClient::Flag::Recursive));
 }
 
 TEST_F(SFTPClient, pull_dir_success_symlink)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY); });
     EXPECT_CALL(*mock_sftp_utils, get_local_dir_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -823,7 +843,7 @@ TEST_F(SFTPClient, pull_dir_success_symlink)
     EXPECT_CALL(*mock_file_ops, is_directory).WillOnce(Return(false));
     EXPECT_CALL(*mock_file_ops, remove(_, _)).WillOnce(Return(true));
     EXPECT_CALL(*mock_file_ops, create_symlink(_, target_path / "symlink", _));
-    EXPECT_CALL(*mock_file_ops, permissions(_, _, _));
+    EXPECT_CALL(mock_platform, set_permissions(_, _)).WillRepeatedly(Return(true));
 
     auto sftp_client = make_sftp_client();
 
@@ -832,7 +852,7 @@ TEST_F(SFTPClient, pull_dir_success_symlink)
 
 TEST_F(SFTPClient, pull_dir_cannot_read_symlink)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY); });
     EXPECT_CALL(*mock_sftp_utils, get_local_dir_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -847,7 +867,7 @@ TEST_F(SFTPClient, pull_dir_cannot_read_symlink)
     REPLACE(sftp_readlink, [](auto...) { return nullptr; });
     auto err = "SFTP server: Permission denied";
     REPLACE(ssh_get_error, [&](auto...) { return err; });
-    EXPECT_CALL(*mock_file_ops, permissions(_, _, _));
+    EXPECT_CALL(mock_platform, set_permissions(_, _)).WillRepeatedly(Return(true));
 
     auto sftp_client = make_sftp_client();
 
@@ -858,7 +878,7 @@ TEST_F(SFTPClient, pull_dir_cannot_read_symlink)
 
 TEST_F(SFTPClient, pull_dir_cannot_create_symlink)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY); });
     EXPECT_CALL(*mock_sftp_utils, get_local_dir_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -876,7 +896,7 @@ TEST_F(SFTPClient, pull_dir_cannot_create_symlink)
     auto err = std::make_error_code(std::errc::permission_denied);
     EXPECT_CALL(*mock_file_ops, create_symlink(_, target_path / "symlink", _))
         .WillOnce([&](auto, auto, std::error_code& e) { e = err; });
-    EXPECT_CALL(*mock_file_ops, permissions(_, _, _)).WillOnce([](auto, auto, auto& err) { err.clear(); });
+    EXPECT_CALL(mock_platform, set_permissions(_, _)).WillRepeatedly(Return(true));
 
     auto sftp_client = make_sftp_client();
 
@@ -887,7 +907,7 @@ TEST_F(SFTPClient, pull_dir_cannot_create_symlink)
 
 TEST_F(SFTPClient, pull_dir_symlink_over_dir)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY); });
     EXPECT_CALL(*mock_sftp_utils, get_local_dir_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -901,7 +921,7 @@ TEST_F(SFTPClient, pull_dir_symlink_over_dir)
 
     REPLACE(sftp_readlink, [](auto...) { return (char*)malloc(10); });
     EXPECT_CALL(*mock_file_ops, is_directory).WillOnce(Return(true));
-    EXPECT_CALL(*mock_file_ops, permissions(_, _, _));
+    EXPECT_CALL(mock_platform, set_permissions(_, _)).WillRepeatedly(Return(true));
 
     auto sftp_client = make_sftp_client();
 
@@ -912,7 +932,7 @@ TEST_F(SFTPClient, pull_dir_symlink_over_dir)
 
 TEST_F(SFTPClient, pull_dir_unknown_file_type)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY); });
     EXPECT_CALL(*mock_sftp_utils, get_local_dir_target(source_path, target_path, _)).WillOnce(Return(target_path));
 
@@ -923,7 +943,7 @@ TEST_F(SFTPClient, pull_dir_unknown_file_type)
     EXPECT_CALL(*iter_p, next)
         .WillOnce(Return(std::unique_ptr<sftp_attributes_struct>(
             get_dummy_sftp_attr(SSH_FILEXFER_TYPE_UNKNOWN, source_path.u8string() + "/unknown"))));
-    EXPECT_CALL(*mock_file_ops, permissions(_, _, _));
+    EXPECT_CALL(mock_platform, set_permissions(_, _)).WillRepeatedly(Return(true));
 
     auto sftp_client = make_sftp_client();
 
@@ -934,7 +954,7 @@ TEST_F(SFTPClient, pull_dir_unknown_file_type)
 
 TEST_F(SFTPClient, pull_dir_r_not_specified)
 {
-    REPLACE(sftp_init, [](auto...) { return SSH_OK; });
+    REPLACE_SFTP_INIT();
     REPLACE(sftp_stat, [](auto...) { return get_dummy_sftp_attr(SSH_FILEXFER_TYPE_DIRECTORY); });
 
     auto sftp_client = make_sftp_client();

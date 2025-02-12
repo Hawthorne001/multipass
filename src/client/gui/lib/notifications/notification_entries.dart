@@ -1,9 +1,21 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:fpdart/fpdart.dart' hide State;
+import 'package:grpc/grpc.dart' hide ConnectionState;
+
+import '../extensions.dart';
+import '../grpc_client.dart';
+import '../sidebar.dart';
 import 'notifications_list.dart';
 
+void closeNotification(BuildContext context) {
+  Actions.maybeInvoke(context, const CloseNotificationIntent());
+}
+
 class SimpleNotification extends StatelessWidget {
-  final String text;
+  final Widget child;
   final Widget icon;
   final Color barColor;
   final bool closeable;
@@ -11,7 +23,7 @@ class SimpleNotification extends StatelessWidget {
 
   const SimpleNotification({
     super.key,
-    required this.text,
+    required this.child,
     required this.icon,
     required this.barColor,
     this.closeable = true,
@@ -40,7 +52,7 @@ class SimpleNotification extends StatelessWidget {
               child: FittedBox(fit: BoxFit.fill, child: icon),
             ),
             const SizedBox(width: 8),
-            Expanded(child: Text(text)),
+            Expanded(child: child),
           ]),
         ),
       ),
@@ -51,9 +63,7 @@ class SimpleNotification extends StatelessWidget {
             splashRadius: 10,
             iconSize: 20,
             icon: const Icon(Icons.close),
-            onPressed: () {
-              Actions.maybeInvoke(context, const CloseNotificationIntent());
-            },
+            onPressed: () => closeNotification(context),
           ),
         ),
     ]);
@@ -61,14 +71,14 @@ class SimpleNotification extends StatelessWidget {
 }
 
 class TimeoutNotification extends StatefulWidget {
-  final String text;
+  final Widget child;
   final Widget icon;
   final Color barColor;
   final Duration duration;
 
   const TimeoutNotification({
     super.key,
-    required this.text,
+    required this.child,
     required this.icon,
     required this.barColor,
     this.duration = const Duration(seconds: 5),
@@ -91,7 +101,7 @@ class _TimeoutNotificationState extends State<TimeoutNotification>
     );
     timeoutController.addStatusListener((status) {
       if (status == AnimationStatus.completed) {
-        close();
+        closeNotification(context);
       }
     });
     timeoutController.forward();
@@ -103,8 +113,6 @@ class _TimeoutNotificationState extends State<TimeoutNotification>
     super.dispose();
   }
 
-  void close() => Actions.invoke(context, const CloseNotificationIntent());
-
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
@@ -113,10 +121,10 @@ class _TimeoutNotificationState extends State<TimeoutNotification>
       child: AnimatedBuilder(
         animation: timeoutController,
         builder: (_, __) => SimpleNotification(
-          text: widget.text,
           icon: widget.icon,
           barColor: widget.barColor,
           barFullness: 1.0 - timeoutController.value,
+          child: widget.child,
         ),
       ),
     );
@@ -124,10 +132,11 @@ class _TimeoutNotificationState extends State<TimeoutNotification>
 }
 
 class ErrorNotification extends SimpleNotification {
-  const ErrorNotification({
+  ErrorNotification({
     super.key,
-    required super.text,
+    required String text,
   }) : super(
+          child: Text(text),
           barColor: Colors.red,
           icon: const Icon(Icons.cancel_outlined, color: Colors.red),
         );
@@ -136,7 +145,7 @@ class ErrorNotification extends SimpleNotification {
 class SuccessNotification extends TimeoutNotification {
   const SuccessNotification({
     super.key,
-    required super.text,
+    required super.child,
   }) : super(
           barColor: Colors.green,
           icon: const Icon(Icons.check_circle_outline, color: Colors.green),
@@ -162,18 +171,130 @@ class OperationNotification extends StatelessWidget {
           return ErrorNotification(text: snapshot.error.toString());
         }
 
-        if (snapshot.hasData) {
-          return SuccessNotification(text: snapshot.data!);
-        }
+        final data = snapshot.data;
+        if (data != null) return SuccessNotification(child: Text(data));
 
         return SimpleNotification(
-          text: text,
           barColor: Colors.blue,
           closeable: false,
           icon: const CircularProgressIndicator(
             color: Colors.blue,
             strokeAlign: -2,
             strokeWidth: 3.5,
+          ),
+          child: Text(text),
+        );
+      },
+    );
+  }
+}
+
+class LaunchingNotification extends ConsumerWidget {
+  final Stream<Either<LaunchReply, MountReply>?> stream;
+  final Completer<void> cancelCompleter;
+  final String name;
+
+  const LaunchingNotification({
+    super.key,
+    required this.stream,
+    required this.cancelCompleter,
+    required this.name,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return StreamBuilder(
+      stream: stream,
+      builder: (_, snapshot) {
+        final error = snapshot.error;
+        if (error != null) {
+          final grpcErrorMessage = error is GrpcError ? error.message : null;
+          return ErrorNotification(text: grpcErrorMessage ?? error.toString());
+        }
+
+        if (snapshot.connectionState == ConnectionState.done) {
+          return SuccessNotification(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text.rich([
+                  '$name is up and running\n'.span.bold,
+                  'You can start using it now'.span,
+                ].spans),
+                Divider(),
+                Row(children: [
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () {
+                      ref.read(sidebarKeyProvider.notifier).set('vm-$name');
+                      closeNotification(context);
+                    },
+                    child: Text('Go to instance'),
+                  ),
+                ]),
+              ],
+            ),
+          );
+        }
+
+        // returns the message to be displayed and if the operation is cancelable
+        final data = snapshot.data?.match(
+          (l) {
+            switch (l.whichCreateOneof()) {
+              case LaunchReply_CreateOneof.launchProgress:
+                final progressType = l.launchProgress.type;
+                if (progressType == LaunchProgress_ProgressTypes.VERIFY) {
+                  return ('Verifying image', false);
+                }
+
+                final downloadPercentage = l.launchProgress.percentComplete;
+                return ('Downloading image $downloadPercentage%', true);
+              case LaunchReply_CreateOneof.createMessage:
+                return (l.createMessage, false);
+              default:
+                return (l.replyMessage, false);
+            }
+          },
+          (m) => (m.replyMessage, false),
+        );
+
+        final (message, cancelable) = data ?? ('', false);
+
+        final notification = SimpleNotification(
+          barColor: Colors.blue,
+          closeable: false,
+          icon: const CircularProgressIndicator(
+            color: Colors.blue,
+            strokeAlign: -2,
+            strokeWidth: 3.5,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text.rich(['Launching $name\n'.span.bold, message.span].spans),
+              if (cancelable) ...[
+                const Divider(),
+                Row(children: [
+                  const Spacer(),
+                  OutlinedButton(
+                    onPressed: () {
+                      closeNotification(context);
+                      cancelCompleter.complete();
+                    },
+                    child: Text('Cancel'),
+                  ),
+                  const SizedBox(width: 20),
+                ])
+              ],
+            ],
+          ),
+        );
+
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () => ref.read(sidebarKeyProvider.notifier).set('vm-$name'),
+            child: notification,
           ),
         );
       },

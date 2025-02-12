@@ -37,7 +37,7 @@
 namespace multipass
 {
 class MemorySize;
-struct VMMount;
+class VMMount;
 struct VMSpecs;
 class MountHandler;
 class Snapshot;
@@ -58,12 +58,20 @@ public:
         unknown
     };
 
+    enum class ShutdownPolicy
+    {
+        Powerdown, // gracefully shut down the vm
+        Poweroff,  // forcefully shut down the vm
+        Halt // halt the vm to non-running state. More specifically. suspended and stopped state will remain the same
+             // and running state will be shut down to stopped state
+    };
+
     using UPtr = std::unique_ptr<VirtualMachine>;
     using ShPtr = std::shared_ptr<VirtualMachine>;
 
     virtual ~VirtualMachine() = default;
     virtual void start() = 0;
-    virtual void shutdown() = 0;
+    virtual void shutdown(ShutdownPolicy shutdown_policy = ShutdownPolicy::Powerdown) = 0;
     virtual void suspend() = 0;
     virtual State current_state() = 0;
     virtual int ssh_port() = 0;
@@ -76,7 +84,10 @@ public:
     virtual std::string management_ipv4() = 0;
     virtual std::vector<std::string> get_all_ipv4() = 0;
     virtual std::string ipv6() = 0;
-    virtual std::string ssh_exec(const std::string& cmd) = 0;
+
+    // careful: default param in virtual method; be sure to keep the same value in all descendants
+    virtual std::string ssh_exec(const std::string& cmd, bool whisper = false) = 0;
+
     virtual void wait_until_ssh_up(std::chrono::milliseconds timeout) = 0;
     virtual void wait_for_cloud_init(std::chrono::milliseconds timeout) = 0;
     virtual void ensure_vm_is_running() = 0;

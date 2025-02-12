@@ -49,6 +49,13 @@ public:
     virtual VirtualMachine::UPtr create_virtual_machine(const VirtualMachineDescription& desc,
                                                         const SSHKeyProvider& key_provider,
                                                         VMStatusMonitor& monitor) = 0;
+    virtual VirtualMachine::UPtr clone_bare_vm(const VMSpecs& src_spec,
+                                               const VMSpecs& dest_spec,
+                                               const std::string& src_name,
+                                               const std::string& dest_name,
+                                               const VMImage& dest_image,
+                                               const SSHKeyProvider& key_provider,
+                                               VMStatusMonitor& monitor) = 0;
 
     /** Removes any resources associated with a VM of the given name.
      *
@@ -73,7 +80,7 @@ public:
     virtual std::vector<NetworkInterfaceInfo> networks() const = 0;
     virtual void require_snapshots_support() const = 0;
     virtual void require_suspend_support() const = 0;
-    virtual std::string bridge_name_for(const std::string& iface_name) const = 0;
+    virtual void require_clone_support() const = 0;
 
 protected:
     VirtualMachineFactory() = default;

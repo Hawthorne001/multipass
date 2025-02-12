@@ -142,7 +142,7 @@ TEST_F(TestGlobalSettingsHandlers, clientsRegisterPersistentHandlerForClientSett
     expect_setting_values({{mp::petenv_key, "primary"}});
 }
 
-TEST_F(TestGlobalSettingsHandlers, clientsRegisterPersistentHandlerWithOverriddingPlatformSettings)
+TEST_F(TestGlobalSettingsHandlers, clientsRegisterPersistentHandlerWithOverridingPlatformSettings)
 {
     const auto platform_defaults = std::map<QString, QString>{{"client.a.setting", "a reasonably long value for this"},
                                                               {mp::petenv_key, "secondary"},
@@ -262,6 +262,34 @@ TEST_F(TestGlobalSettingsHandlers, daemonRegistersHandlerThatAcceptsValidBackend
 
     EXPECT_CALL(mock_platform, is_backend_supported(Eq(val))).WillOnce(Return(true));
     EXPECT_CALL(*mock_qsettings, setValue(Eq(key), Eq(val)));
+    inject_mock_qsettings();
+
+    ASSERT_NO_THROW(handler->set(key, val));
+}
+
+TEST_F(TestGlobalSettingsHandlers, daemonRegistersHandlerThatTransformsHyperVDriver)
+{
+    const auto key = mp::driver_key;
+    const auto val = "hyper-v";
+    const auto transformed_val = "hyperv";
+
+    mp::daemon::register_global_settings_handlers();
+
+    EXPECT_CALL(*mock_qsettings, setValue(Eq(key), Eq(transformed_val))).Times(1);
+    inject_mock_qsettings();
+
+    ASSERT_NO_THROW(handler->set(key, val));
+}
+
+TEST_F(TestGlobalSettingsHandlers, daemonRegistersHandlerThatTransformsVBoxDriver)
+{
+    const auto key = mp::driver_key;
+    const auto val = "vbox";
+    const auto transformed_val = "virtualbox";
+
+    mp::daemon::register_global_settings_handlers();
+
+    EXPECT_CALL(*mock_qsettings, setValue(Eq(key), Eq(transformed_val))).Times(1);
     inject_mock_qsettings();
 
     ASSERT_NO_THROW(handler->set(key, val));

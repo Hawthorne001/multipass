@@ -340,6 +340,23 @@ TEST(Utils, make_file_with_content_throws_on_write_error)
                          mpt::match_what(HasSubstr("failed to write to file")));
 }
 
+TEST(Utils, make_file_with_content_throws_on_failure_to_flush)
+{
+    std::string file_name{"some_dir/test-file"};
+
+    auto [mock_file_ops, guard] = mpt::MockFileOps::inject();
+
+    EXPECT_CALL(*mock_file_ops, exists(A<const QFile&>())).WillOnce(Return(false));
+    EXPECT_CALL(*mock_file_ops, mkpath(_, _)).WillOnce(Return(true));
+    EXPECT_CALL(*mock_file_ops, open(_, _)).WillOnce(Return(true));
+    EXPECT_CALL(*mock_file_ops, write(A<QFile&>(), _, _)).WillOnce(Return(file_contents.size()));
+    EXPECT_CALL(*mock_file_ops, flush(A<QFile&>())).WillOnce(Return(false));
+
+    MP_EXPECT_THROW_THAT(MP_UTILS.make_file_with_content(file_name, file_contents),
+                         std::runtime_error,
+                         mpt::match_what(HasSubstr("failed to flush file")));
+}
+
 TEST(Utils, expectedScryptHashReturned)
 {
     const auto passphrase = MP_UTILS.generate_scrypt_hash_for("passphrase");
@@ -436,13 +453,6 @@ TEST(Utils, trim_newline_assertion_works)
 {
     std::string s{"wrong"};
     ASSERT_DEBUG_DEATH(mp::utils::trim_newline(s), "[Aa]ssert");
-}
-
-TEST(Utils, escape_char_actually_escapes)
-{
-    std::string s{"I've got \"quotes\""};
-    auto res = mp::utils::escape_char(s, '"');
-    EXPECT_THAT(res, ::testing::StrEq("I've got \\\"quotes\\\""));
 }
 
 TEST(Utils, escape_for_shell_actually_escapes)
@@ -596,29 +606,6 @@ TEST(Utils, validate_server_address_does_not_throw_on_good_address)
     EXPECT_NO_THROW(mp::utils::validate_server_address("test-server.net:123"));
 }
 
-TEST(Utils, dir_is_a_dir)
-{
-    mpt::TempDir temp_dir;
-    EXPECT_TRUE(mp::utils::is_dir(temp_dir.path().toStdString()));
-}
-
-TEST(Utils, file_is_not_a_dir)
-{
-    mpt::TempDir temp_dir;
-    auto file_name = temp_dir.path() + "/empty_test_file";
-    mpt::make_file_with_content(file_name, "");
-
-    EXPECT_FALSE(mp::utils::is_dir(file_name.toStdString()));
-}
-
-TEST(Utils, filename_only_is_returned)
-{
-    std::string file_name{"my_file"};
-    std::string full_path{"/tmp/foo/" + file_name};
-
-    EXPECT_THAT(mp::utils::filename_for(full_path), Eq(file_name));
-}
-
 TEST(Utils, no_subdirectory_returns_same_path)
 {
     mp::Path original_path{"/tmp/foo"};
@@ -728,35 +715,4 @@ TEST(Utils, check_filesystem_bytes_available_returns_non_negative)
     auto bytes_available = MP_UTILS.filesystem_bytes_available(temp_dir.path());
 
     EXPECT_GE(bytes_available, 0);
-}
-
-TEST(VaultUtils, copy_creates_new_file_and_returned_path_exists)
-{
-    mpt::TempDir temp_dir1, temp_dir2;
-    auto orig_file_path = QDir(temp_dir1.path()).filePath("test_file");
-
-    mpt::make_file_with_content(orig_file_path);
-
-    auto new_file_path = mp::vault::copy(orig_file_path, temp_dir2.path());
-
-    EXPECT_TRUE(QFile::exists(new_file_path));
-}
-
-TEST(VaultUtils, copy_returns_empty_path_when_file_name_is_empty)
-{
-    mpt::TempDir temp_dir;
-
-    auto path = mp::vault::copy("", temp_dir.path());
-
-    EXPECT_TRUE(path.isEmpty());
-}
-
-TEST(VaultUtils, copy_throws_when_file_does_not_exist)
-{
-    mpt::TempDir temp_dir;
-
-    const QString file_name{"/foo/bar"};
-
-    MP_EXPECT_THROW_THAT(mp::vault::copy(file_name, temp_dir.path()), std::runtime_error,
-                         mpt::match_what(StrEq(fmt::format("{} missing", file_name))));
 }

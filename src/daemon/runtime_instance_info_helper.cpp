@@ -85,7 +85,7 @@ void mp::RuntimeInstanceInfoHelper::populate_runtime_info(mp::VirtualMachine& vm
                                                           bool parallelize)
 {
     const auto& cmd = parallelize ? Cmds::parallel_composite_cmd : Cmds::sequential_composite_cmd;
-    auto results = YAML::Load(vm.ssh_exec(cmd));
+    auto results = YAML::Load(vm.ssh_exec(cmd, /* whisper = */ true));
 
     instance_info->set_load(results[Keys::loadavg_key].as<std::string>());
     instance_info->set_memory_usage(results[Keys::mem_usage_key].as<std::string>());
@@ -94,7 +94,9 @@ void mp::RuntimeInstanceInfoHelper::populate_runtime_info(mp::VirtualMachine& vm
     info->set_disk_total(results[Keys::disk_total_key].as<std::string>());
     info->set_cpu_count(results[Keys::cpus_key].as<std::string>());
     instance_info->set_cpu_times(results[Keys::cpu_times_key].as<std::string>());
-    instance_info->set_uptime(results[Keys::uptime_key].as<std::string>());
+    // In some older versions of Ubuntu, "uptime -p" prints only "up" right after startup. In those cases,
+    // results[Keys::uptime_key] is null.
+    instance_info->set_uptime(results[Keys::uptime_key].as<std::string>(/* fallback = */ "0 minutes"));
 
     auto current_release = results[Keys::current_release_key].as<std::string>();
     instance_info->set_current_release(!current_release.empty() ? current_release : original_release);

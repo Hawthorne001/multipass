@@ -36,21 +36,12 @@
 
 namespace mp = multipass;
 namespace mpl = multipass::logging;
-namespace mu = multipass::utils;
+namespace mpu = multipass::utils;
 
 namespace
 {
 constexpr auto category = "lxd factory";
 const QString multipass_bridge_name = "mpbr0";
-
-template <typename NetworkContainer>
-auto find_bridge_with(const NetworkContainer& networks, const std::string& member_network)
-{
-    return std::find_if(std::cbegin(networks), std::cend(networks),
-                        [&member_network](const mp::NetworkInterfaceInfo& info) {
-                            return info.type == "bridge" && info.has_link(member_network);
-                        });
-}
 
 mp::NetworkInterfaceInfo munch_network(std::map<std::string, mp::NetworkInterfaceInfo>& platform_networks,
                                        const QJsonObject& network)
@@ -146,7 +137,7 @@ void mp::LXDVirtualMachineFactory::hypervisor_health_check()
     catch (const LocalSocketConnectionException& e)
     {
         std::string snap_msg;
-        if (mu::in_multipass_snap())
+        if (mpu::in_multipass_snap())
             snap_msg = " Also make sure\n the LXD interface is connected via `snap connect multipass:lxd lxd`.";
 
         throw std::runtime_error(
@@ -241,27 +232,18 @@ auto mp::LXDVirtualMachineFactory::networks() const -> std::vector<NetworkInterf
 
     if (!networks.isEmpty())
     {
+        const auto& br_nomenclature = MP_PLATFORM.bridge_nomenclature();
         auto platform_networks = MP_PLATFORM.get_network_interfaces_info();
         for (const QJsonValueRef net_value : networks)
             if (auto network = munch_network(platform_networks, net_value.toObject()); !network.id.empty())
                 ret.push_back(std::move(network));
 
         for (auto& net : ret)
-            if (net.needs_authorization && find_bridge_with(ret, net.id) != ret.cend())
+            if (net.needs_authorization && mpu::find_bridge_with(ret, net.id, br_nomenclature))
                 net.needs_authorization = false;
     }
 
     return ret;
-}
-
-std::string mp::LXDVirtualMachineFactory::bridge_name_for(const std::string& iface_name) const
-{
-    return MP_BACKEND.bridge_name(iface_name);
-};
-
-void mp::LXDVirtualMachineFactory::prepare_networking(std::vector<NetworkInterface>& extra_interfaces)
-{
-    prepare_networking_guts(extra_interfaces, "bridge");
 }
 
 std::string mp::LXDVirtualMachineFactory::create_bridge_with(const NetworkInterfaceInfo& interface)

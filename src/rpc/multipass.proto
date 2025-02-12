@@ -43,6 +43,8 @@ service Rpc {
     rpc authenticate (stream AuthenticateRequest) returns (stream AuthenticateReply);
     rpc snapshot (stream SnapshotRequest) returns (stream SnapshotReply);
     rpc restore (stream RestoreRequest) returns (stream RestoreReply);
+    rpc clone (stream CloneRequest) returns (stream CloneReply);
+    rpc daemon_info (stream DaemonInfoRequest) returns (stream DaemonInfoReply);
 }
 
 message LaunchRequest {
@@ -254,6 +256,7 @@ message InfoReply {
     repeated DetailedInfoItem details = 1;
     bool snapshots = 2; // useful to determine what entity (instance/snapshot) was absent when details are empty
     string log_line = 3;
+    UpdateInfo update_info = 4;
 }
 
 message ListRequest {
@@ -399,6 +402,7 @@ message StopRequest {
     int32 time_minutes = 2;
     bool cancel_shutdown = 3;
     int32 verbosity_level = 4;
+    bool force_stop = 5;
 }
 
 message StopReply {
@@ -524,4 +528,25 @@ message RestoreReply {
     string log_line = 1;
     string reply_message = 2;
     bool confirm_destructive = 3;
+}
+
+message CloneRequest {
+    string source_name = 1;
+    optional string destination_name = 2;
+    int32 verbosity_level = 3;
+}
+
+message CloneReply {
+    string reply_message = 1;
+    string log_line = 2;
+}
+message DaemonInfoRequest {
+    int32 verbosity_level = 1;
+}
+
+message DaemonInfoReply {
+    string log_line = 1;
+    uint64 available_space = 2;
+    uint32 cpus = 3;
+    uint64 memory = 4;
 }

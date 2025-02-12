@@ -20,6 +20,7 @@
 #include "ssh_client_key_provider.h"
 #include <multipass/file_ops.h>
 #include <multipass/logging/log.h>
+#include <multipass/platform.h>
 #include <multipass/ssh/sftp_utils.h>
 #include <multipass/ssh/throw_on_error.h>
 #include <multipass/utils.h>
@@ -29,7 +30,6 @@
 #include <fmt/std.h>
 
 constexpr int file_mode = 0664;
-constexpr auto max_transfer = 65536u;
 const std::string stream_file_name{"stream_output.dat"};
 const char* log_category = "sftp";
 
@@ -146,9 +146,8 @@ void SFTPClient::pull_file(const fs::path& source_path, const fs::path& target_p
     do_pull_file(source_path, *local_file);
 
     auto source_perms = mp_sftp_stat(sftp.get(), source_path.u8string().c_str())->permissions;
-    std::error_code err;
-    if (MP_FILEOPS.permissions(target_path, static_cast<fs::perms>(source_perms), err); err)
-        throw SFTPError{"cannot set permissions for local file {}: {}", target_path, err.message()};
+    if (!MP_PLATFORM.set_permissions(target_path, static_cast<fs::perms>(source_perms)))
+        throw SFTPError{"cannot set permissions for local file {}", target_path};
 
     if (local_file->fail())
         throw SFTPError{"cannot write to local file {}: {}", target_path, strerror(errno)};
@@ -301,11 +300,11 @@ bool SFTPClient::pull_dir(const fs::path& source_path, const fs::path& target_pa
     for (auto it = subdirectory_perms.crbegin(); it != subdirectory_perms.crend(); ++it)
     {
         const auto& [path, perms] = *it;
-        MP_FILEOPS.permissions(path, static_cast<fs::perms>(perms), err);
-        if (err)
+        if (!MP_PLATFORM.set_permissions(path, static_cast<fs::perms>(perms)))
         {
-            mpl::log(mpl::Level::error, log_category,
-                     fmt::format("cannot set permissions for local directory {}: {}", path, err.message()));
+            mpl::log(mpl::Level::error,
+                     log_category,
+                     fmt::format("cannot set permissions for local directory {}", path));
             success = false;
         }
     }
@@ -331,9 +330,12 @@ void SFTPClient::do_push_file(std::istream& source, const fs::path& target_path)
     if (!remote_file)
         throw SFTPError{"cannot open remote file {}: {}", target_path, ssh_get_error(sftp->session)};
 
-    std::array<char, max_transfer> buffer{};
-    while (auto r = source.read(buffer.data(), buffer.size()).gcount())
-        if (sftp_write(remote_file.get(), buffer.data(), r) < 0)
+    // create an uninitialized buffer to use.
+    const auto max_write = sftp_limits(sftp.get())->max_write_length;
+    const std::unique_ptr<char[]> buffer{new char[max_write]};
+
+    while (auto r = source.read(buffer.get(), max_write).gcount())
+        if (sftp_write(remote_file.get(), buffer.get(), r) < 0)
             throw SFTPError{"cannot write to remote file {}: {}", target_path, ssh_get_error(sftp->session)};
 }
 
@@ -343,13 +345,16 @@ void SFTPClient::do_pull_file(const fs::path& source_path, std::ostream& target)
     if (!remote_file)
         throw SFTPError{"cannot open remote file {}: {}", source_path, ssh_get_error(sftp->session)};
 
-    std::array<char, max_transfer> buffer{};
-    while (auto r = sftp_read(remote_file.get(), buffer.data(), buffer.size()))
+    // create an uninitialized buffer to use.
+    const auto max_read = sftp_limits(sftp.get())->max_read_length;
+    const std::unique_ptr<char[]> buffer{new char[max_read]};
+
+    while (auto r = sftp_read(remote_file.get(), buffer.get(), max_read))
     {
         if (r < 0)
             throw SFTPError{"cannot read from remote file {}: {}", source_path, ssh_get_error(sftp->session)};
 
-        target.write(buffer.data(), r);
+        target.write(buffer.get(), r);
     }
 }
 

@@ -33,14 +33,13 @@ namespace mpl = multipass::logging;
 mp::SSHSession::SSHSession(const std::string& host,
                            int port,
                            const std::string& username,
-                           const SSHKeyProvider& key_provider,
-                           const std::chrono::milliseconds timeout)
+                           const SSHKeyProvider& key_provider)
     : session{ssh_new(), ssh_free}, mut{}
 {
     if (session == nullptr)
         throw mp::SSHException("could not allocate ssh session");
 
-    const long timeout_secs = std::chrono::duration_cast<std::chrono::seconds>(timeout).count();
+    const long timeout_secs = std::numeric_limits<long>::max();
     const int nodelay{1};
     auto ssh_dir = QDir(MP_STDPATHS.writableLocation(StandardPaths::AppConfigLocation)).filePath("ssh").toStdString();
 
@@ -90,9 +89,11 @@ multipass::SSHSession::~SSHSession()
     force_shutdown(); // do we really need this?
 }
 
-mp::SSHProcess mp::SSHSession::exec(const std::string& cmd)
+mp::SSHProcess mp::SSHSession::exec(const std::string& cmd, bool whisper)
 {
-    mpl::log(mpl::Level::debug, "ssh session", fmt::format("Executing '{}'", cmd));
+    auto lvl = whisper ? mpl::Level::trace : mpl::Level::debug;
+    mpl::log(lvl, "ssh session", fmt::format("Executing '{}'", cmd));
+
     return {session.get(), cmd, std::unique_lock{mut}};
 }
 

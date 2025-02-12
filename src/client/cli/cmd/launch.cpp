@@ -219,8 +219,9 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
                   .arg(petenv_name, mp::home_automount_dir, valid_name_desc);
 
     QCommandLineOption nameOption({"n", "name"}, name_option_desc, "name");
-    QCommandLineOption cloudInitOption(
-        "cloud-init", "Path or URL to a user-data cloud-init configuration, or '-' for stdin", "file> | <url");
+    QCommandLineOption cloudInitOption("cloud-init",
+                                       "Path or URL to a user-data cloud-init configuration, or '-' for stdin.",
+                                       "file> | <url");
     QCommandLineOption networkOption("network",
                                      "Add a network interface to the instance, where <spec> is in the "
                                      "\"key=value,key=value\" format, with the following keys available:\n"
@@ -233,9 +234,10 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
                                      "spec");
     QCommandLineOption bridgedOption("bridged", "Adds one `--network bridged` network.");
     QCommandLineOption mountOption("mount",
-                                   "Mount a local directory inside the instance. If <instance-path> is omitted, the "
-                                   "mount point will be the same as the absolute path of <local-path>",
-                                   "local-path>:<instance-path");
+                                   "Mount a local directory inside the instance. If <target> is omitted, the "
+                                   "mount point will be under /home/ubuntu/<source-dir>, where <source-dir> is "
+                                   "the name of the <source> directory.",
+                                   "source>:<target");
 
     parser->addOptions({cpusOption, diskOption, memOption, memOptionDeprecated, nameOption, cloudInitOption,
                         networkOption, bridgedOption, mountOption});
@@ -347,10 +349,9 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
         for (const auto& value : parser->values(mountOption))
         {
             // this is needed so that Windows absolute paths are not split at the colon following the drive letter
-            auto colon_split = QRegularExpression{R"(^[A-Za-z]:[\\/].*)"}.match(value).hasMatch();
-            auto mount_source = value.section(':', 0, colon_split);
-            auto mount_target = value.section(':', colon_split + 1);
-            mount_target = mount_target.isEmpty() ? mount_source : mount_target;
+            const auto colon_split = QRegularExpression{R"(^[A-Za-z]:[\\/].*)"}.match(value).hasMatch();
+            const auto mount_source = value.section(':', 0, colon_split);
+            const auto mount_target = value.section(':', colon_split + 1);
 
             // Validate source directory of client side mounts
             QFileInfo source_dir(mount_source);
@@ -378,36 +379,41 @@ mp::ParseCode cmd::Launch::parse_args(mp::ArgParser* parser)
 
     if (parser->isSet(cloudInitOption))
     {
+        constexpr auto err_msg_template = "Could not load cloud-init configuration: {}";
         try
         {
+            const QString& cloud_init_file = parser->value(cloudInitOption);
             YAML::Node node;
-            const QString& cloudInitFile = parser->value(cloudInitOption);
-            if (cloudInitFile == "-")
+            if (cloud_init_file == "-")
             {
                 node = YAML::Load(term->read_all_cin());
             }
-            else if (cloudInitFile.startsWith("http://") || cloudInitFile.startsWith("https://"))
+            else if (cloud_init_file.startsWith("http://") || cloud_init_file.startsWith("https://"))
             {
                 URLDownloader downloader{std::chrono::minutes{1}};
-                auto downloaded_yaml = downloader.download(QUrl(cloudInitFile));
+                auto downloaded_yaml = downloader.download(QUrl(cloud_init_file));
                 node = YAML::Load(downloaded_yaml.toStdString());
             }
             else
             {
-                auto file_type = fs::status(cloudInitFile.toStdString()).type();
+                auto cloud_init_file_stdstr = cloud_init_file.toStdString();
+                auto file_type = fs::status(cloud_init_file_stdstr).type();
                 if (file_type != fs::file_type::regular && file_type != fs::file_type::fifo)
-                {
-                    cerr << "error: No such file: " << cloudInitFile.toStdString() << "\n";
-                    return ParseCode::CommandLineError;
-                }
+                    throw YAML::BadFile{cloud_init_file_stdstr};
 
-                node = YAML::LoadFile(cloudInitFile.toStdString());
+                node = YAML::LoadFile(cloud_init_file_stdstr);
             }
             request.set_cloud_init_user_data(YAML::Dump(node));
         }
-        catch (const std::exception& e)
+        catch (const YAML::BadFile& e)
         {
-            cerr << "error loading cloud-init config: " << e.what() << "\n";
+            auto err_detail = fmt::format("{}\n{}", e.what(), "Please ensure that Multipass can read it.");
+            fmt::println(cerr, err_msg_template, err_detail);
+            return ParseCode::CommandLineError;
+        }
+        catch (const YAML::Exception& e)
+        {
+            fmt::println(cerr, err_msg_template, e.what());
             return ParseCode::CommandLineError;
         }
     }

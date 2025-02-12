@@ -105,11 +105,6 @@ bool mp::FileOps::open(QFileDevice& file, QIODevice::OpenMode mode) const
     return file.open(mode);
 }
 
-QFileDevice::Permissions mp::FileOps::permissions(const QFile& file) const
-{
-    return file.permissions();
-}
-
 qint64 mp::FileOps::read(QFile& file, char* data, qint64 maxSize) const
 {
     return file.read(data, maxSize);
@@ -145,11 +140,6 @@ bool mp::FileOps::seek(QFile& file, qint64 pos) const
     return file.seek(pos);
 }
 
-bool mp::FileOps::setPermissions(QFile& file, QFileDevice::Permissions permissions) const
-{
-    return file.setPermissions(permissions);
-}
-
 qint64 mp::FileOps::size(QFile& file) const
 {
     return file.size();
@@ -163,6 +153,16 @@ qint64 mp::FileOps::write(QFile& file, const char* data, qint64 maxSize) const
 qint64 mp::FileOps::write(QFileDevice& file, const QByteArray& data) const
 {
     return file.write(data);
+}
+
+bool mp::FileOps::flush(QFile& file) const
+{
+    return file.flush();
+}
+
+bool mp::FileOps::copy(const QString& from, const QString& to) const
+{
+    return QFile::copy(from, to);
 }
 
 bool mp::FileOps::commit(QSaveFile& file) const
@@ -217,6 +217,11 @@ std::unique_ptr<std::istream> mp::FileOps::open_read(const fs::path& path, std::
     return std::make_unique<std::ifstream>(path, mode);
 }
 
+void mp::FileOps::copy(const fs::path& src, const fs::path& dist, fs::copy_options copy_options) const
+{
+    fs::copy(src, dist, copy_options);
+}
+
 bool mp::FileOps::exists(const fs::path& path, std::error_code& err) const
 {
     return fs::exists(path, err);
@@ -252,11 +257,6 @@ fs::path mp::FileOps::read_symlink(const fs::path& path, std::error_code& err) c
     return fs::read_symlink(path, err);
 }
 
-void mp::FileOps::permissions(const fs::path& path, fs::perms perms, std::error_code& err) const
-{
-    fs::permissions(path, perms, err);
-}
-
 fs::file_status mp::FileOps::status(const fs::path& path, std::error_code& err) const
 {
     return fs::status(path, err);
@@ -276,4 +276,19 @@ std::unique_ptr<mp::RecursiveDirIterator> mp::FileOps::recursive_dir_iterator(co
 std::unique_ptr<mp::DirIterator> mp::FileOps::dir_iterator(const fs::path& path, std::error_code& err) const
 {
     return std::make_unique<mp::DirIterator>(path, err);
+}
+
+fs::path mp::FileOps::weakly_canonical(const fs::path& path) const
+{
+    return fs::weakly_canonical(path);
+}
+
+fs::path mp::FileOps::remove_extension(const fs::path& path) const
+{
+    return path.parent_path() / path.stem();
+}
+
+fs::perms mp::FileOps::get_permissions(const fs::path& file) const
+{
+    return fs::status(file).permissions();
 }

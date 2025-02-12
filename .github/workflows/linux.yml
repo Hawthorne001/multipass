@@ -14,7 +14,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.number && format('pr{0}', github.event.number) || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'merge_group' }}
 
 jobs:
   Lint:
@@ -73,6 +73,7 @@ jobs:
 
     strategy:
       matrix: ${{ fromJSON(needs.GetMatrix.outputs.matrix) }}
+      fail-fast: ${{ github.event_name == 'merge_group' }}
 
     runs-on: ubuntu-latest
 
@@ -82,10 +83,10 @@ jobs:
     timeout-minutes: 120
     steps:
     - name: Install Snapcraft
-      uses: samuelmeuli/action-snapcraft@v2
+      uses: samuelmeuli/action-snapcraft@v3
 
     - name: Install LXD
-      uses: canonical/setup-lxd@7be523c4c2724a31218a627809044c6a2f0870ad
+      uses: canonical/setup-lxd@440e41ff0951baa2274821bd311dd5242517fadd
 
     - name: Check out code
       uses: actions/checkout@v4
@@ -193,7 +194,7 @@ jobs:
 
         # Wait for LXD container network to be ready like Snapcraft does
         timeout 40 sh -c \
-          'while /snap/bin/lxc --project snapcraft exec '$instance_name' -- getent hosts multipass.run ; \
+          'while /snap/bin/lxc --project snapcraft exec '$instance_name' -- getent hosts canonical.com ; \
              [ $? -ne 0 ] ; do sleep 1; done'
 
         # The following 2 commands workaround the issue in 20.04 where the default parsing of the coverage
@@ -235,6 +236,7 @@ jobs:
         name: ${{ steps.build-snap.outputs.snap-file }}
         path: ${{ steps.build-snap.outputs.snap-file }}
         if-no-files-found: error
+        retention-days: 30
 
   # Publish the snap to the store if a channel was determined and we have access to secrets.
   Publish-Snap:
@@ -259,7 +261,7 @@ jobs:
         name: ${{ needs.BuildAndTest.outputs.snap-file }}
 
     - name: Install Snapcraft and log in
-      uses: samuelmeuli/action-snapcraft@v2
+      uses: samuelmeuli/action-snapcraft@v3
 
     - name: Publish the snap
       env:

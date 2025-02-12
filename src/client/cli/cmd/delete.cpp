@@ -68,7 +68,12 @@ mp::ReturnCode cmd::Delete::run(mp::ArgParser* parser)
         return mp::ReturnCode::Ok;
     };
 
-    auto on_failure = [this](grpc::Status& status) { return standard_failure_handler_for(name(), cerr, status); };
+    auto on_failure = [this](grpc::Status& status) {
+        // grpc::StatusCode::FAILED_PRECONDITION matches mp::VMStateInvalidException
+        return status.error_code() == grpc::StatusCode::FAILED_PRECONDITION
+                   ? standard_failure_handler_for(name(), cerr, status, "Use --purge to forcefully delete it.")
+                   : standard_failure_handler_for(name(), cerr, status);
+    };
 
     using Client = grpc::ClientReaderWriterInterface<DeleteRequest, DeleteReply>;
     auto streaming_callback = [this](const mp::DeleteReply& reply, Client* client) {
@@ -105,7 +110,7 @@ QString cmd::Delete::short_help() const
 QString cmd::Delete::description() const
 {
     return QStringLiteral(
-        "Delete instances and snapshots. Instances can be purged immediately or later on,\n"
+        "Delete instances and snapshots (in stopped instances). Instances can be purged immediately or later on,\n"
         "with the \"purge\" command. Until they are purged, instances can be recovered\n"
         "with the \"recover\" command. Snapshots cannot be recovered after deletion and must be purged at once.");
 }

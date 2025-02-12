@@ -134,16 +134,16 @@ struct QemuMountHandlerTest : public ::Test
 
     mpt::StubSSHKeyProvider key_provider;
     std::string default_source{"source"}, default_target{"target"};
+    mp::id_mappings gid_mappings{{1, 2}}, uid_mappings{{5, 6}};
+    mp::VMMount mount{default_source, gid_mappings, uid_mappings, mp::VMMount::MountType::Native};
     mpt::MockFileOps::GuardedMock mock_file_ops_injection = mpt::MockFileOps::inject();
     mpt::MockFileOps& mock_file_ops = *mock_file_ops_injection.first;
-    mp::id_mappings gid_mappings{{1, 2}}, uid_mappings{{5, 6}};
     mpt::MockLogger::Scope logger_scope = mpt::MockLogger::inject(mpl::Level::debug);
     mpt::MockServerReaderWriter<mp::MountReply, mp::MountRequest> server;
     mpt::MockSSHTestFixture mock_ssh_test_fixture;
     mpt::ExitStatusMock exit_status_mock;
     NiceMock<MockQemuVirtualMachine> vm{"my_instance"};
     mp::QemuVirtualMachine::MountArgs mount_args;
-    mp::VMMount mount{default_source, gid_mappings, uid_mappings, mp::VMMount::MountType::Native};
     CommandOutputs command_outputs{
         {"echo $PWD/target", {"/home/ubuntu/target"}},
         {command_get_existing_parent("/home/ubuntu/target"), {"/home/ubuntu/target"}},
@@ -194,8 +194,11 @@ TEST_F(QemuMountHandlerTest, mount_handles_mount_args)
         const auto uid_arg = QString("uid_map=%1:%2,").arg(uid_mappings.front().first).arg(uid_mappings.front().second);
         const auto gid_arg = QString{"gid_map=%1:%2,"}.arg(gid_mappings.front().first).arg(gid_mappings.front().second);
         EXPECT_EQ(mount_args.begin()->second.second.join(' ').toStdString(),
-                  fmt::format("-virtfs local,security_model=passthrough,{}{}path={},mount_tag={}", uid_arg, gid_arg,
-                              mount.source_path, tag_from_target(default_target)));
+                  fmt::format("-virtfs local,security_model=passthrough,{}{}path={},mount_tag={}",
+                              uid_arg,
+                              gid_arg,
+                              mount.get_source_path(),
+                              tag_from_target(default_target)));
     }
 
     EXPECT_EQ(mount_args.size(), 0);
@@ -203,8 +206,9 @@ TEST_F(QemuMountHandlerTest, mount_handles_mount_args)
 
 TEST_F(QemuMountHandlerTest, mount_logs_init)
 {
-    logger_scope.mock_logger->expect_log(mpl::Level::info, fmt::format("initializing native mount {} => {} in '{}'",
-                                                                       mount.source_path, default_target, vm.vm_name));
+    logger_scope.mock_logger->expect_log(
+        mpl::Level::info,
+        fmt::format("initializing native mount {} => {} in '{}'", mount.get_source_path(), default_target, vm.vm_name));
     EXPECT_NO_THROW(mp::QemuMountHandler(&vm, &key_provider, default_target, mount));
 }
 
@@ -214,7 +218,9 @@ TEST_F(QemuMountHandlerTest, recover_from_suspended)
     EXPECT_CALL(vm, current_state()).WillOnce(Return(mp::VirtualMachine::State::suspended));
     logger_scope.mock_logger->expect_log(mpl::Level::info,
                                          fmt::format("Found native mount {} => {} in '{}' while suspended",
-                                                     mount.source_path, default_target, vm.vm_name));
+                                                     mount.get_source_path(),
+                                                     default_target,
+                                                     vm.vm_name));
     EXPECT_NO_THROW(mp::QemuMountHandler(&vm, &key_provider, default_target, mount));
 }
 

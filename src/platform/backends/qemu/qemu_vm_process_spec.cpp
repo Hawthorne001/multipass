@@ -25,7 +25,7 @@
 
 namespace mp = multipass;
 namespace mpl = multipass::logging;
-namespace mu = multipass::utils;
+namespace mpu = multipass::utils;
 
 mp::QemuVMProcessSpec::QemuVMProcessSpec(const mp::VirtualMachineDescription& desc, const QStringList& platform_args,
                                          const mp::QemuVirtualMachine::MountArgs& mount_args,
@@ -123,6 +123,10 @@ profile %1 flags=(attach_disconnected) {
   capability setgid,
   capability setuid,
 
+  # for bridge helper
+  capability net_admin,
+  capability net_raw,
+
   network inet stream,
   network inet6 stream,
 
@@ -152,6 +156,9 @@ profile %1 flags=(attach_disconnected) {
   /{usr/,}bin/dash rmix,
   /{usr/,}bin/dd rmix,
   /{usr/,}bin/cat rmix,
+
+  # to execute bridge helper
+  %4/bin/bridge_helper ix,
 
   # for restore
   /{usr/,}bin/bash rmix,
@@ -196,7 +203,7 @@ profile %1 flags=(attach_disconnected) {
 
     try
     {
-        root_dir = mu::snap_dir();
+        root_dir = mpu::snap_dir();
         signal_peer = "snap.multipass.multipassd"; // only multipassd can send qemu signals
         firmware = root_dir + "/qemu/*";           // if snap confined, firmware in $SNAP/qemu
     }
